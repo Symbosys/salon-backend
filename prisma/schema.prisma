@@ -1,0 +1,267 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  name      String
+  mobile    String   @unique
+  email     String?
+  role      String   @default("CUSTOMER")
+
+  address   String?
+  city      String?
+  state     String?
+  pincode   String?
+  latitude  Float?
+  longitude Float?
+
+  createdAt DateTime @default(now())
+
+  salons         Salon[]
+  bookings       Booking[]
+  reviews        Review[]
+  notifications  Notification[]
+  favorites      Favorite[]
+}
+
+model Partner {
+  id            Int            @id @default(autoincrement())
+  name          String
+  mobile        String         @unique
+  email         String?
+  createdAt     DateTime       @default(now())
+
+  salons        Salon[]
+  notifications Notification[]
+}
+
+model Salon {
+  id        Int      @id @default(autoincrement())
+
+  // Existing owner relation
+  ownerId   Int?
+  owner     User?    @relation(fields: [ownerId], references: [id])
+
+  // Partner relation
+  partnerId Int?
+  partner   Partner? @relation(fields: [partnerId], references: [id])
+  ownerName String?
+
+  name      String
+  category  String   @default("Unisex Salon")
+  address   String
+  city      String
+  state     String
+  pincode   String
+  latitude  Float?
+  longitude Float?
+  status    String   @default("PENDING")
+  rejectionReason String?
+  isLive    Boolean  @default(false)
+
+  aadhaarNumber   String?
+  aadhaarDocument String?
+  panNumber       String?
+  panDocument     String?
+
+  createdAt DateTime @default(now())
+
+  services       Service[]
+  staff          Staff[]
+  bookings       Booking[]
+  offers         Offer[]
+  reviews        Review[]
+  availabilities Availability[]
+  settlements    Settlement[]
+
+  image     String?
+  favorites Favorite[]
+}
+
+model Service {
+  id        Int      @id @default(autoincrement())
+  salonId   Int
+  name      String
+  category  String
+  price     Float
+  duration  Int
+  icon      String?
+  isActive  Boolean  @default(true)
+  isDeleted Boolean @default(false)
+  createdAt DateTime @default(now())
+
+  salon     Salon     @relation(fields: [salonId], references: [id])
+  bookings  Booking[]
+  bookingServices BookingService[]
+}
+
+model Staff {
+  id        Int      @id @default(autoincrement())
+  salonId   Int
+  name      String
+  role      String
+  status    String   @default("AVAILABLE")
+  isDeleted Boolean @default(false)
+  createdAt DateTime @default(now())
+
+  salon     Salon    @relation(fields: [salonId], references: [id])
+  bookings  Booking[]
+}
+
+model Booking {
+  id          Int      @id @default(autoincrement())
+  bookingId   String   @unique
+  customerId  Int
+  salonId     Int
+  serviceId   Int
+  staffId     Int?
+  date        DateTime
+  time        String
+  amount      Float
+  bookingFee  Float    @default(10)
+  discount    Float    @default(0)
+  finalAmount Float
+  status      String   @default("PENDING")
+  createdAt   DateTime @default(now())
+
+  customer    User     @relation(fields: [customerId], references: [id])
+  salon       Salon    @relation(fields: [salonId], references: [id])
+  service     Service  @relation(fields: [serviceId], references: [id])
+  staff       Staff?   @relation(fields: [staffId], references: [id])
+
+  payment Payment?
+  reviews   Review[]
+  settlement Settlement?
+  bookingServices BookingService[]
+  qrCode String?
+  cancelReason String?
+  refunds Refund[]
+}
+
+model Payment {
+  id            Int      @id @default(autoincrement())
+  bookingId     Int      @unique
+  amount        Float
+  paymentMethod String
+  status        String   @default("PENDING")
+  transactionId String?
+  createdAt     DateTime @default(now())
+
+  booking       Booking  @relation(fields: [bookingId], references: [id])
+}
+
+model Offer {
+  id          Int       @id @default(autoincrement())
+  salonId     Int
+  title       String
+  description String?
+  discount    Float
+  isActive    Boolean   @default(true)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  salon       Salon     @relation(fields: [salonId], references: [id])
+}
+
+model Review {
+  id         Int      @id @default(autoincrement())
+  bookingId  Int      @unique
+  customerId Int
+  salonId    Int
+  rating     Int
+  comment    String?
+  createdAt  DateTime @default(now())
+
+  booking    Booking  @relation(fields: [bookingId], references: [id])
+  customer   User     @relation(fields: [customerId], references: [id])
+  salon      Salon    @relation(fields: [salonId], references: [id])
+}
+
+model Notification {
+  id        Int       @id @default(autoincrement())
+  userId    Int?
+  partnerId Int?
+
+  title     String
+  message   String
+  isRead    Boolean   @default(false)
+  createdAt DateTime  @default(now())
+
+  user      User?     @relation(fields: [userId], references: [id])
+  partner   Partner?  @relation(fields: [partnerId], references: [id])
+}
+
+model Availability {
+  id        Int      @id @default(autoincrement())
+  salonId   Int
+  date      DateTime
+  time      String
+  isAvailable Boolean @default(true)
+  createdAt DateTime @default(now())
+
+  salon     Salon    @relation(fields: [salonId], references: [id])
+}
+
+model Settlement {
+  id            Int      @id @default(autoincrement())
+  bookingId     Int      @unique
+  salonId       Int
+  amount        Float
+  commission    Float    @default(0)
+  partnerAmount Float
+  status        String   @default("PENDING")
+  createdAt     DateTime @default(now())
+
+  booking       Booking  @relation(fields: [bookingId], references: [id])
+  salon         Salon    @relation(fields: [salonId], references: [id])
+}
+
+model Category {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  icon      String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+model BookingService {
+  id        Int      @id @default(autoincrement())
+  bookingId Int
+  serviceId Int
+
+  booking   Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  service   Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([bookingId, serviceId])
+}
+
+model Favorite {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  salonId   Int
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  salon     Salon    @relation(fields: [salonId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, salonId])
+}
+
+model Refund {
+  id              Int      @id @default(autoincrement())
+  bookingId       Int
+  refundAmount    Float
+  refundReason    String
+  refundStatus    String   @default("PENDING")
+  paymentMethod   String?
+  transactionId   String?
+  refundedAt      DateTime?
+  createdAt       DateTime @default(now())
+
+  booking         Booking  @relation(fields: [bookingId], references: [id])
+}
