@@ -1,62 +1,232 @@
 import { Router } from "express";
 import prisma from "../../../prisma";
+import { sendFcmNotification } from "../../../services/fcm.service";
 
 const router = Router();
 
-// Get all salons
+
+async function notifyPartnerApplicationStatus(
+  partnerId: number,
+  salonId: number,
+  salonName: string,
+  status: "APPLICATION_APPROVED" | "APPLICATION_REJECTED",
+  rejectionReason?: string
+) {
+  const isApproved = status === "APPLICATION_APPROVED";
+
+  const title = isApproved
+    ? "Application Approved"
+    : "Application Rejected";
+
+  const message = isApproved
+    ? `Congratulations! Your salon ${salonName} has been approved.`
+    : `Your salon ${salonName} application was rejected. Reason: ${rejectionReason}`;
+
+  const notification = await prisma.notification.create({
+    data: {
+      partnerId,
+      title,
+      message,
+    },
+  });
+
+  const devices = await prisma.deviceToken.findMany({
+    where: {
+      partnerId,
+      isActive: true,
+    },
+  });
+
+  for (const device of devices) {
+    try {
+      await sendFcmNotification(device.token, title, message, {
+        type: status,
+        recipientId: String(partnerId),
+        partnerId: String(partnerId),
+        salonId: String(salonId),
+        notificationId: String(notification.id),
+        screen: isApproved ? "Home" : "Correction",
+      });
+    } catch (error) {
+      console.error(
+        `Partner application notification failed for device ${device.id}:`,
+        error
+      );
+    }
+  }
+}
+
+// GET ALL SALONS
 router.get("/", async (_req, res) => {
   try {
     const salons = await prisma.salon.findMany({
       include: {
         owner: true,
+        partner: true,
+        reviews: true,
+        bookings: true,
       },
       orderBy: {
         createdAt: "desc",
       },
     });
 
-    return res.json(salons);
-  } catch (error) {
-    console.error(error);
+    const formattedSalons = salons.map((salon) => {
+      const totalReviews = salon.reviews?.length || 0;
 
+      const averageRating =
+        totalReviews > 0
+          ? salon.reviews.reduce(
+              (sum, review) => sum + Number(review.rating || 0),
+              0
+            ) / totalReviews
+          : 0;
+
+      const kycVerified =
+        !!salon.aadhaarNumber &&
+        !!salon.panNumber;
+
+      return {
+        ...salon,
+
+        // Partner information
+        partner: salon.partner
+          ? {
+              id: salon.partner.id,
+              name: salon.partner.name,
+              mobile: salon.partner.mobile,
+              email: salon.partner.email,
+            }
+          : null,
+
+        // Admin list values
+        rating: Number(averageRating.toFixed(1)),
+        bookings: salon.bookings?.length || 0,
+        kyc: kycVerified ? "Verified" : "Pending",
+      };
+    });
+
+    return res.json(formattedSalons);
+  } catch (error) {
+    console.error("Get All Salons Error:", error);
     return res.status(500).json({
-      message: "Something went wrong",
+      message: "Failed to fetch salons",
     });
   }
 });
 
-// Approve salon
+// ======================================================
+// GET SINGLE SALON
+// GET /api/admin/salons/:id
+// ======================================================
+router.get("/:id", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({
+        message: "Invalid salon ID",
+      });
+    }
+
+    const salon = await prisma.salon.findUnique({
+      where: {
+        id,
+      },
+      include: {
+        owner: true,
+        partner: true,
+        services: true,
+        staff: true,
+        bookings: true,
+        offers: true,
+        reviews: true,
+        availabilities: true,
+      },
+    });
+
+    if (!salon) {
+      return res.status(404).json({
+        message: "Salon not found",
+      });
+    }
+
+    return res.json(salon);
+  } catch (error) {
+    console.error("Get Salon Error:", error);
+
+    return res.status(500).json({
+      message: "Failed to fetch salon",
+    });
+  }
+});
+
+// ======================================================
+// APPROVE SALON
+// PATCH /api/admin/salons/:id/approve
+// ======================================================
 router.patch("/:id/approve", async (req, res) => {
   try {
     const id = Number(req.params.id);
 
-    const salon = await prisma.salon.update({
-      where: {
-        id,
-      },
-      data: {
-        status: "APPROVED",
-      },
-    });
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({
+        message: "Invalid salon ID",
+      });
+    }
 
-    return res.json({
-      message: "Salon approved successfully",
-      salon,
-    });
+    
+const salon = await prisma.salon.update({
+  where: {
+    id,
+  },
+  data: {
+    status: "APPROVED",
+    rejectionReason: null,
+  },
+});
+
+if (salon.partnerId) {
+  try {
+    await notifyPartnerApplicationStatus(
+      salon.partnerId,
+      salon.id,
+      salon.name,
+      "APPLICATION_APPROVED"
+    );
   } catch (error) {
-    console.error(error);
+    console.error("Partner approval notification error:", error);
+  }
+}
+
+return res.json({
+  message: "Salon approved successfully",
+  salon,
+});
+
+  } catch (error) {
+    console.error("Approve Salon Error:", error);
 
     return res.status(500).json({
-      message: "Something went wrong",
+      message: "Failed to approve salon",
     });
   }
 });
 
-// Reject salon
+// ======================================================
+// REJECT SALON
+// PATCH /api/admin/salons/:id/reject
+// ======================================================
 router.patch("/:id/reject", async (req, res) => {
   try {
     const id = Number(req.params.id);
     const { rejectionReason } = req.body;
+
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({
+        message: "Invalid salon ID",
+      });
+    }
 
     if (!rejectionReason || !String(rejectionReason).trim()) {
       return res.status(400).json({
@@ -64,33 +234,57 @@ router.patch("/:id/reject", async (req, res) => {
       });
     }
 
-    const salon = await prisma.salon.update({
-      where: {
-        id,
-      },
-      data: {
-        status: "REJECTED",
-        rejectionReason: String(rejectionReason).trim(),
-      },
-    });
+    
+const salon = await prisma.salon.update({
+  where: {
+    id,
+  },
+  data: {
+    status: "REJECTED",
+    rejectionReason: String(rejectionReason).trim(),
+  },
+});
 
-    return res.json({
-      message: "Salon rejected successfully",
-      salon,
-    });
+if (salon.partnerId) {
+  try {
+    await notifyPartnerApplicationStatus(
+      salon.partnerId,
+      salon.id,
+      salon.name,
+      "APPLICATION_REJECTED",
+      String(rejectionReason).trim()
+    );
   } catch (error) {
-    console.error(error);
+    console.error("Partner rejection notification error:", error);
+  }
+}
+
+return res.json({
+  message: "Salon rejected successfully",
+  salon,
+});
+  } catch (error) {
+    console.error("Reject Salon Error:", error);
 
     return res.status(500).json({
-      message: "Something went wrong",
+      message: "Failed to reject salon",
     });
   }
 });
 
-// Update salon
+// ======================================================
+// UPDATE SALON
+// PATCH /api/admin/salons/:id
+// ======================================================
 router.patch("/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
+
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({
+        message: "Invalid salon ID",
+      });
+    }
 
     const {
       name,
@@ -119,18 +313,27 @@ router.patch("/:id", async (req, res) => {
 
     return res.json(salon);
   } catch (error) {
-    console.error(error);
+    console.error("Update Salon Error:", error);
 
     return res.status(500).json({
-      message: "Something went wrong",
+      message: "Failed to update salon",
     });
   }
 });
 
-// Delete salon
+// ======================================================
+// DELETE SALON
+// DELETE /api/admin/salons/:id
+// ======================================================
 router.delete("/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
+
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({
+        message: "Invalid salon ID",
+      });
+    }
 
     const salon = await prisma.salon.delete({
       where: {
@@ -143,10 +346,10 @@ router.delete("/:id", async (req, res) => {
       salon,
     });
   } catch (error) {
-    console.error(error);
+    console.error("Delete Salon Error:", error);
 
     return res.status(500).json({
-      message: "Something went wrong",
+      message: "Failed to delete salon",
     });
   }
 });

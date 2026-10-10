@@ -16,9 +16,32 @@ router.get("/", async (_req, res) => {
       },
     });
 
-    return res.json(settlements);
+    const formattedSettlements = settlements.map((settlement) => {
+      const amount = Number(settlement.amount || 0);
+      const commission = Number(settlement.commission || 0);
+      const partnerAmount = Number(settlement.partnerAmount || 0);
+
+      return {
+        ...settlement,
+
+        settlementId: `SET${String(settlement.id).padStart(4, "0")}`,
+
+        salonName: settlement.salon?.name || "-",
+
+        amount,
+        commission,
+        partnerAmount,
+
+        bookingCount: settlement.bookingId ? 1 : 0,
+
+        date: settlement.createdAt,
+        status: settlement.status,
+      };
+    });
+
+    return res.json(formattedSettlements);
   } catch (error) {
-    console.error(error);
+    console.error("Admin Settlements Error:", error);
 
     return res.status(500).json({
       message: "Something went wrong",

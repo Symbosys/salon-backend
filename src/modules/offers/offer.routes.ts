@@ -1,5 +1,6 @@
 import { Router } from "express";
 import prisma from "../../prisma";
+import { sendFcmNotification } from "../../services/fcm.service";
 
 const router = Router();
 
@@ -28,7 +29,103 @@ router.post("/", async (req, res) => {
         discount: Number(discount),
         isActive: isActive ?? true,
       },
+      include: {
+        salon: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+      },
     });
+
+    // ==========================================================
+    // NEW OFFER NOTIFICATION
+    // ==========================================================
+
+    if (offer.isActive) {
+      const notificationTitle = "New Offer Available 🎉";
+
+      const notificationMessage =
+        `${offer.salon.name} has a new ${offer.discount}% OFF offer. Tap to check it out.`;
+
+      const notificationType = "NEW_OFFER";
+
+      // Get every active Customer device token
+      const customerTokens = await prisma.deviceToken.findMany({
+        where: {
+          userId: {
+            not: null,
+          },
+          isActive: true,
+          user: {
+            role: "CUSTOMER",
+          },
+        },
+      });
+
+      // Group devices by Customer
+      const customerDevices = new Map<number, typeof customerTokens>();
+
+      for (const device of customerTokens) {
+        if (!device.userId) {
+          continue;
+        }
+
+        const existingDevices =
+          customerDevices.get(device.userId) || [];
+
+        existingDevices.push(device);
+
+        customerDevices.set(
+          device.userId,
+          existingDevices,
+        );
+      }
+
+      // One In-App notification per Customer
+      // FCM to every active device of that Customer
+      for (const [customerId, devices] of customerDevices) {
+        try {
+          const notification =
+            await prisma.notification.create({
+              data: {
+                userId: customerId,
+                title: notificationTitle,
+                message: notificationMessage,
+              },
+            });
+
+          for (const device of devices) {
+            try {
+              await sendFcmNotification(
+                device.token,
+                notificationTitle,
+                notificationMessage,
+                {
+                  type: notificationType,
+                  recipientId: String(customerId),
+                  notificationId: String(notification.id),
+                  salonId: String(offer.salonId),
+                  offerId: String(offer.id),
+                  screen: "Offer",
+                },
+              );
+            } catch (error) {
+              console.error(
+                `Customer NEW_OFFER FCM failed for token ${device.id}:`,
+                error,
+              );
+            }
+          }
+        } catch (error) {
+          console.error(
+            `NEW_OFFER notification failed for customer ${customerId}:`,
+            error,
+          );
+        }
+      }
+    }
 
     return res.status(201).json({
       message: "Offer created successfully",

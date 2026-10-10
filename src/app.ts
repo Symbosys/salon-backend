@@ -27,10 +27,19 @@ import locationRoutes from "./modules/location/location.routes";
 import categoryRoutes from "./modules/categories/category.routes";
 import userRoutes from "./modules/users/user.routes";
 import favoriteRoutes from "./modules/favorites/favorite.routes";
+import uploadRoutes from "./modules/uploads/upload.routes";
+import adminRefundRoutes from "./modules/admin/refunds/admin-refund.routes";
+import adminPartnerRoutes from "./modules/admin/partners/admin-partner.routes";
+import adminAuthRoutes from "./modules/admin/auth/admin-auth.routes";
+import path from "path";
 
 dotenv.config();
 
 const app = express();
+app.use(
+  "/uploads",
+  express.static(path.join(process.cwd(), "uploads"))
+);
 
 app.use(cors());
 app.use(express.json());
@@ -60,6 +69,11 @@ app.use("/api/location", locationRoutes);
 app.use("/api/categories", categoryRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/favorites", favoriteRoutes);
+app.use("/api/uploads", uploadRoutes);
+app.use("/api/admin/refunds", adminRefundRoutes);
+app.use("/api/admin/partners", adminPartnerRoutes);
+app.use("/api/admin/auth", adminAuthRoutes);
+
 
 app.get("/", (_req, res) => {
   res.json({

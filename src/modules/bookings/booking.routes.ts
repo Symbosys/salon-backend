@@ -1,5 +1,6 @@
 import { Router } from "express";
 import prisma from "../../prisma";
+import { sendFcmNotification } from "../../services/fcm.service";
 
 const expireMissedBookings = async () => {
   try {
@@ -28,9 +29,10 @@ const expireMissedBookings = async () => {
             id: booking.id,
           },
           data: {
-            status: "CANCELLED",
-            cancelReason: "SALON_NOT_ACCEPTED",
-          },
+  status: "CANCELLED",
+  cancelledAt: new Date(),
+  cancelReason: "SALON_NOT_ACCEPTED",
+},
         });
 
         console.log(
@@ -80,9 +82,10 @@ const expireMissedBookings = async () => {
             id: booking.id,
           },
           data: {
-            status: "CANCELLED",
-            cancelReason: "NOT_ARRIVED",
-          },
+  status: "CANCELLED",
+  cancelledAt: new Date(),
+  cancelReason: "NOT_ARRIVED",
+},
         });
 
         await prisma.notification.create({
@@ -328,6 +331,97 @@ if (salon.partnerId) {
   );
 }
 
+// ===============================
+// FCM PUSH NOTIFICATIONS
+// ===============================
+
+try {
+  // -------------------------------
+  // Customer FCM
+  // -------------------------------
+
+  const customerTokens = await tx.deviceToken.findMany({
+    where: {
+      userId: customerIdNumber,
+      isActive: true,
+    },
+  });
+
+  for (const device of customerTokens) {
+    try {
+      await sendFcmNotification(
+        device.token,
+        "Booking Request Sent",
+        "Your appointment request has been sent to the salon. You'll be notified once the salon confirms your booking.",
+        {
+          type: "BOOKING_REQUEST_SENT",
+          recipientId: String(customerIdNumber),
+          bookingId: String(bookingId),
+          salonId: String(salonIdNumber),
+          notificationId: "",
+          screen: "BookingDetails",
+        },
+      );
+    } catch (error) {
+      console.error(
+        `Customer FCM failed for token ${device.id}:`,
+        error,
+      );
+    }
+  }
+
+  // -------------------------------
+  // Partner FCM
+  // -------------------------------
+
+  if (salon.partnerId) {
+    const partnerTokens = await tx.deviceToken.findMany({
+      where: {
+        partnerId: salon.partnerId,
+        isActive: true,
+      },
+    });
+
+    const customer = await tx.user.findUnique({
+      where: {
+        id: customerIdNumber,
+      },
+    });
+
+    const customerName = customer?.name || "Customer";
+
+    for (const device of partnerTokens) {
+      try {
+        await sendFcmNotification(
+          device.token,
+          "New Booking Request",
+          `You have received a new booking request from ${customerName} for ${dateOnly} at ${time}.`,
+          {
+            type: "NEW_BOOKING",
+            recipientId: String(salon.partnerId),
+            bookingId: String(bookingId),
+            salonId: String(salonIdNumber),
+            notificationId: "",
+            screen: "BookingDetails",
+          },
+        );
+      } catch (error) {
+        console.error(
+          `Partner FCM failed for token ${device.id}:`,
+          error,
+        );
+      }
+    }
+  }
+
+  console.log(`FCM notifications processed for booking ${bookingId}`);
+} catch (error) {
+  console.error(
+    `FCM booking notification error for ${bookingId}:`,
+    error,
+  );
+}
+
 return newBooking;
  });
 
@@ -482,9 +576,10 @@ router.patch("/customer/:customerId/:bookingId/cancel", async (req, res) => {
           id: booking.id,
         },
         data: {
-          status: "CANCELLED",
-          cancelReason: "SALON_NOT_ACCEPTED",
-        },
+  status: "CANCELLED",
+  cancelledAt: new Date(),
+  cancelReason: "SALON_NOT_ACCEPTED",
+},
       });
 
       await prisma.notification.create({
@@ -531,6 +626,65 @@ router.patch("/customer/:customerId/:bookingId/cancel", async (req, res) => {
           message: `Your booking ${booking.bookingId} has been cancelled successfully.`,
         },
       });
+
+      
+      // ===============================
+      // PARTNER: BOOKING CANCELLED BY CUSTOMER
+      // ===============================
+
+      const salon = await tx.salon.findUnique({
+        where: {
+          id: booking.salonId,
+        },
+      });
+
+      if (salon?.partnerId) {
+        const notificationTitle = "Booking Cancelled by Customer";
+        const notificationMessage =
+          `Booking ${booking.bookingId} has been cancelled by the customer.`;
+
+        // Partner in-app notification
+        const partnerNotification = await tx.notification.create({
+          data: {
+            partnerId: salon.partnerId,
+            title: notificationTitle,
+            message: notificationMessage,
+          },
+        });
+
+        // Get active Partner FCM tokens
+        const partnerTokens = await tx.deviceToken.findMany({
+          where: {
+            partnerId: salon.partnerId,
+            isActive: true,
+          },
+        });
+
+        // Send FCM to all Partner devices
+        for (const device of partnerTokens) {
+          try {
+            await sendFcmNotification(
+              device.token,
+              notificationTitle,
+              notificationMessage,
+              {
+                type: "BOOKING_CANCELLED_BY_CUSTOMER",
+                recipientId: String(salon.partnerId),
+                bookingId: String(booking.bookingId),
+                salonId: String(booking.salonId),
+                notificationId: String(partnerNotification.id),
+                screen: "BookingDetails",
+              },
+            );
+          } catch (error) {
+            console.error(
+              `BOOKING_CANCELLED_BY_CUSTOMER FCM failed for token ${device.id}:`,
+              error,
+            );
+          }
+        }
+      }
+
 
       return cancelled;
     });
@@ -818,30 +972,239 @@ router.patch("/partner/:mobile/:bookingId/status", async (req, res) => {
           id: booking.id,
         },
         data: {
-          status,
-          cancelReason: status === "CANCELLED" ? "SALON_REJECTED" : null,
-        },
+  status,
+
+  acceptedAt:
+    status === "ACCEPTED"
+      ? new Date()
+      : booking.acceptedAt,
+
+  cancelledAt:
+    status === "CANCELLED"
+      ? new Date()
+      : booking.cancelledAt,
+
+  cancelReason:
+    status === "CANCELLED"
+      ? "SALON_REJECTED"
+      : null,
+},
       });
 
       if (status === "ACCEPTED") {
-        await tx.notification.create({
+  const notification = await tx.notification.create({
+    data: {
+      userId: booking.customerId,
+      title: "Booking Confirmed! 🎉",
+      message: `Your appointment has been confirmed by the salon.`,
+    },
+  });
+
+  const customerTokens = await tx.deviceToken.findMany({
+    where: {
+      userId: booking.customerId,
+      isActive: true,
+    },
+  });
+
+  for (const device of customerTokens) {
+    try {
+      await sendFcmNotification(
+        device.token,
+        "Booking Confirmed! 🎉",
+        `Your appointment has been confirmed by the salon.`,
+        {
+          type: "BOOKING_CONFIRMED",
+          recipientId: String(booking.customerId),
+          bookingId: String(booking.bookingId),
+          salonId: String(booking.salonId),
+          notificationId: String(notification.id),
+          screen: "BookingDetails",
+        },
+      );
+    } catch (error) {
+      console.error(
+        `Customer FCM failed for token ${device.id}:`,
+        error,
+      );
+    }
+  }
+}
+
+
+      if (status === "ARRIVED") {
+        const notificationTitle = "Customer Arrived";
+        const notificationMessage =
+  "Your arrival has been confirmed. Your salon service will start shortly.";
+
+        // Customer in-app notification
+        const notification = await tx.notification.create({
           data: {
             userId: booking.customerId,
-            title: "Booking Accepted",
-            message: `Your booking ${booking.bookingId} has been accepted by the salon.`,
+            title: notificationTitle,
+            message: notificationMessage,
           },
         });
+
+        // Customer FCM device tokens
+        const customerTokens = await tx.deviceToken.findMany({
+          where: {
+            userId: booking.customerId,
+            isActive: true,
+          },
+        });
+
+        // Send push notification to all Customer devices
+        for (const device of customerTokens) {
+          try {
+            await sendFcmNotification(
+              device.token,
+              notificationTitle,
+              notificationMessage,
+              {
+                type: "CUSTOMER_ARRIVED",
+                recipientId: String(booking.customerId),
+                bookingId: String(booking.bookingId),
+                salonId: String(booking.salonId),
+                notificationId: String(notification.id),
+                screen: "BookingDetails",
+              },
+            );
+          } catch (error) {
+            console.error(
+              `CUSTOMER_ARRIVED FCM failed for token ${device.id}:`,
+              error,
+            );
+          }
+        }
       }
 
+
       if (status === "CANCELLED") {
-        await tx.notification.create({
-          data: {
-            userId: booking.customerId,
-            title: "Booking Rejected",
-            message: `Your booking ${booking.bookingId} has been rejected by the salon.`,
-          },
-        });
-      }
+  const notification = await tx.notification.create({
+    data: {
+      userId: booking.customerId,
+      title: "Booking Rejected",
+      message: `Your appointment request for ${booking.date.toLocaleDateString(
+        "en-GB",
+      )} at ${booking.time} was rejected by the salon.`,
+    },
+  });
+
+  const customerTokens = await tx.deviceToken.findMany({
+    where: {
+      userId: booking.customerId,
+      isActive: true,
+    },
+  });
+
+  for (const device of customerTokens) {
+    try {
+      await sendFcmNotification(
+        device.token,
+        "Booking Rejected",
+        `Your appointment request for ${booking.date.toLocaleDateString(
+          "en-GB",
+        )} at ${booking.time} was rejected by the salon.`,
+        {
+          type: "BOOKING_REJECTED",
+          recipientId: String(booking.customerId),
+          bookingId: String(booking.bookingId),
+          salonId: String(booking.salonId),
+          notificationId: String(notification.id),
+          screen: "BookingDetails",
+        },
+      );
+    } catch (error) {
+      console.error(
+        `Customer FCM failed for token ${device.id}:`,
+        error,
+      );
+    }
+  }
+}
+
+if (status === "STARTED") {
+  const notification = await tx.notification.create({
+    data: {
+      userId: booking.customerId,
+      title: "Service Started",
+      message: "Your salon service has started.",
+    },
+  });
+
+  const customerTokens = await tx.deviceToken.findMany({
+    where: {
+      userId: booking.customerId,
+      isActive: true,
+    },
+  });
+
+  for (const device of customerTokens) {
+    try {
+      await sendFcmNotification(
+        device.token,
+        "Service Started",
+        "Your salon service has started.",
+        {
+          type: "SERVICE_STARTED",
+          recipientId: String(booking.customerId),
+          bookingId: String(booking.bookingId),
+          salonId: String(booking.salonId),
+          notificationId: String(notification.id),
+          screen: "BookingDetails",
+        },
+      );
+    } catch (error) {
+      console.error(
+        `Customer FCM failed for token ${device.id}:`,
+        error,
+      );
+    }
+  }
+}
+
+if (status === "COMPLETED") {
+  const salonName = salon.name || "the salon";
+
+  const notification = await tx.notification.create({
+    data: {
+      userId: booking.customerId,
+      title: "Service Completed",
+      message: `Your appointment has been completed successfully. Thank you for visiting ${salonName}.`,
+    },
+  });
+
+  const customerTokens = await tx.deviceToken.findMany({
+    where: {
+      userId: booking.customerId,
+      isActive: true,
+    },
+  });
+
+  for (const device of customerTokens) {
+    try {
+      await sendFcmNotification(
+        device.token,
+        "Service Completed",
+        `Your appointment has been completed successfully. Thank you for visiting ${salonName}.`,
+        {
+          type: "SERVICE_COMPLETED",
+          recipientId: String(booking.customerId),
+          bookingId: String(booking.bookingId),
+          salonId: String(booking.salonId),
+          notificationId: String(notification.id),
+          screen: "BookingDetails",
+        },
+      );
+    } catch (error) {
+      console.error(
+        `Customer FCM failed for token ${device.id}:`,
+        error,
+      );
+    }
+  }
+}
 
       // Release the booked slot when salon rejects the booking
       if (status === "CANCELLED") {
@@ -1209,6 +1572,48 @@ router.post("/partner/:mobile/verify-qr", async (req, res) => {
         status: "COMPLETED",
       },
     });
+
+    // ===============================
+// CUSTOMER SERVICE COMPLETED
+// ===============================
+
+const notification = await prisma.notification.create({
+  data: {
+    userId: booking.customerId,
+    title: "Service Completed",
+    message: `Your appointment has been completed successfully. Thank you for visiting ${salon.name}.`,
+  },
+});
+
+const customerTokens = await prisma.deviceToken.findMany({
+  where: {
+    userId: booking.customerId,
+    isActive: true,
+  },
+});
+
+for (const device of customerTokens) {
+  try {
+    await sendFcmNotification(
+      device.token,
+      "Service Completed",
+      `Your appointment has been completed successfully. Thank you for visiting ${salon.name}.`,
+      {
+        type: "SERVICE_COMPLETED",
+        recipientId: String(booking.customerId),
+        bookingId: String(booking.bookingId),
+        salonId: String(booking.salonId),
+        notificationId: String(notification.id),
+        screen: "BookingDetails",
+      },
+    );
+  } catch (error) {
+    console.error(
+      `Customer FCM failed for token ${device.id}:`,
+      error,
+    );
+  }
+}
 
     return res.json({
       message: "QR verified and booking completed successfully",

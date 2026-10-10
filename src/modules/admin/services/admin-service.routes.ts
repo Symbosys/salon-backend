@@ -7,8 +7,16 @@ const router = Router();
 router.get("/", async (_req, res) => {
   try {
     const services = await prisma.service.findMany({
+      where: {
+        isDeleted: false,
+      },
       include: {
         salon: true,
+        _count: {
+          select: {
+            bookings: true,
+          },
+        },
       },
       orderBy: {
         createdAt: "desc",
@@ -31,13 +39,18 @@ router.get("/:id", async (req, res) => {
     const id = Number(req.params.id);
 
     const service = await prisma.service.findUnique({
-      where: {
-        id,
+  where: {
+    id,
+  },
+  include: {
+    salon: true,
+    _count: {
+      select: {
+        bookings: true,
       },
-      include: {
-        salon: true,
-      },
-    });
+    },
+  },
+});
 
     if (!service) {
       return res.status(404).json({

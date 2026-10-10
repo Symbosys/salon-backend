@@ -16,6 +16,7 @@ model User {
   address   String?
   city      String?
   state     String?
+  status String @default("ACTIVE")
   pincode   String?
   latitude  Float?
   longitude Float?
@@ -27,6 +28,7 @@ model User {
   reviews        Review[]
   notifications  Notification[]
   favorites      Favorite[]
+  deviceTokens   DeviceToken[]
 }
 
 model Partner {
@@ -34,10 +36,12 @@ model Partner {
   name          String
   mobile        String         @unique
   email         String?
+  status        String         @default("ACTIVE")
   createdAt     DateTime       @default(now())
 
   salons        Salon[]
   notifications Notification[]
+  deviceTokens  DeviceToken[]
 }
 
 model Salon {
@@ -128,6 +132,8 @@ model Booking {
   finalAmount Float
   status      String   @default("PENDING")
   createdAt   DateTime @default(now())
+  acceptedAt   DateTime?
+cancelledAt  DateTime?
 
   customer    User     @relation(fields: [customerId], references: [id])
   salon       Salon    @relation(fields: [salonId], references: [id])
@@ -182,19 +188,23 @@ model Review {
   salon      Salon    @relation(fields: [salonId], references: [id])
 }
 
+
 model Notification {
-  id        Int       @id @default(autoincrement())
+  id        Int      @id @default(autoincrement())
   userId    Int?
   partnerId Int?
+  adminId   Int?
 
   title     String
   message   String
-  isRead    Boolean   @default(false)
-  createdAt DateTime  @default(now())
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
 
-  user      User?     @relation(fields: [userId], references: [id])
-  partner   Partner?  @relation(fields: [partnerId], references: [id])
+  user      User?    @relation(fields: [userId], references: [id])
+  partner   Partner? @relation(fields: [partnerId], references: [id])
+  admin     Admin?   @relation(fields: [adminId], references: [id])
 }
+
 
 model Availability {
   id        Int      @id @default(autoincrement())
@@ -264,4 +274,36 @@ model Refund {
   createdAt       DateTime @default(now())
 
   booking         Booking  @relation(fields: [bookingId], references: [id])
+}
+
+model Admin {
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String   @unique
+  password  String
+  status    String   @default("ACTIVE")
+  createdAt DateTime @default(now())
+  deviceTokens DeviceToken[]
+  notifications Notification[]
+}
+
+model DeviceToken {
+  id         Int      @id @default(autoincrement())
+  token      String   @unique
+  platform   String
+  deviceType String?
+  userId     Int?
+  partnerId  Int?
+  adminId    Int?
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user       User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  partner    Partner? @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  admin      Admin?   @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([partnerId])
+  @@index([adminId])
 }

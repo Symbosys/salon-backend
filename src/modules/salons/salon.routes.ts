@@ -1,7 +1,124 @@
 import { Router } from "express";
 import prisma from "../../prisma";
+import { sendFcmNotification } from "../../services/fcm.service";
 
 const router = Router();
+
+
+
+async function notifyAdminsVerificationSubmitted(
+  partnerId: number,
+  salonId: number,
+  salonName: string,
+  notificationType: "NEW_PARTNER_REGISTRATION" | "VERIFICATION_RESUBMITTED"
+) {
+  const admins = await prisma.admin.findMany();
+
+  for (const admin of admins) {
+    
+const isResubmission = notificationType === "VERIFICATION_RESUBMITTED";
+
+const title = isResubmission
+  ? "Partner Verification Resubmitted"
+  : "New Partner Registration";
+
+const message = isResubmission
+  ? `${salonName} has resubmitted verification documents. Please review the application.`
+  : `${salonName} has submitted a new partner registration. Please review the application.`;
+
+
+    const notification = await prisma.notification.create({
+      data: {
+        adminId: admin.id,
+        title,
+        message,
+      },
+    });
+
+    const tokens = await prisma.deviceToken.findMany({
+      where: {
+        adminId: admin.id,
+        isActive: true,
+      },
+    });
+
+    for (const device of tokens) {
+      try {
+        await sendFcmNotification(
+          device.token,
+          title,
+          message,
+          {
+            type: notificationType,
+            recipientId: String(admin.id),
+            partnerId: String(partnerId),
+            salonId: String(salonId),
+            notificationId: String(notification.id),
+            screen: "Notifications",
+          }
+        );
+      } catch (error) {
+        console.error(
+          `Admin verification FCM failed for token ${device.id}:`,
+          error
+        );
+      }
+    }
+  }
+}
+
+
+async function notifyPartnerApplicationPending(
+  partnerId: number,
+  salonId: number,
+  salonName: string
+) {
+  const title = "Application Submitted Successfully";
+  const message = `Your salon ${salonName} application has been submitted and is pending admin approval.`;
+
+  const notification = await prisma.notification.create({
+    data: {
+      partnerId,
+      title,
+      message,
+    },
+  });
+
+  const devices = await prisma.deviceToken.findMany({
+    where: {
+      partnerId,
+      isActive: true,
+    },
+  });
+
+  console.log("PENDING NOTIFICATION PARTNER ID:", partnerId);
+console.log("PARTNER DEVICES FOUND:", devices.length);
+
+  for (const device of devices) {
+    try {
+      await sendFcmNotification(
+        device.token,
+        title,
+        message,
+        {
+          type: "APPLICATION_PENDING",
+          recipientId: String(partnerId),
+          partnerId: String(partnerId),
+          salonId: String(salonId),
+          notificationId: String(notification.id),
+          screen: "Verification",
+        }
+      );
+    } catch (error) {
+      console.error(
+        `Partner pending notification failed for device ${device.id}:`,
+        error
+      );
+    }
+  }
+}
+
+
 
 const partnerOtps = new Map<string, string>();
 
@@ -253,6 +370,8 @@ router.patch("/partner/:mobile/live", async (req, res) => {
         message: "Salon not found",
       });
     }
+
+    
 
     const updatedSalon = await prisma.salon.update({
       where: {
@@ -668,6 +787,35 @@ if (!partner) {
       },
     });
 
+    try {
+  await notifyAdminsVerificationSubmitted(
+  partner.id,
+  salon.id,
+  salon.name,
+  "NEW_PARTNER_REGISTRATION"
+);
+} catch (error) {
+  console.error(
+    "Admin verification notification error:",
+    error
+  );
+}
+
+
+try {
+  await notifyPartnerApplicationPending(
+    partner.id,
+    salon.id,
+    salon.name
+  );
+} catch (error) {
+  console.error(
+    "Partner pending notification error:",
+    error
+  );
+}
+
+
     return res.status(201).json({
       message: "Registration submitted successfully",
       partner,
@@ -681,6 +829,7 @@ if (!partner) {
     });
   }
 });
+
 
 router.put("/partner/:mobile/resubmit", async (req, res) => {
   try {
@@ -749,48 +898,100 @@ router.put("/partner/:mobile/resubmit", async (req, res) => {
       });
     }
 
-    const updatedSalon = await prisma.salon.update({
-      where: {
-        id: salon.id,
-      },
-      data: {
-        ownerName: String(ownerName),
-        name: String(name),
-        category: String(category),
-        address: String(address),
-        city: String(city),
-        state: String(state),
-        pincode: String(pincode),
+    // Update Partner and Salon together
+    const { updatedPartner, updatedSalon } =
+      await prisma.$transaction(async (tx) => {
+        const updatedPartner = await tx.partner.update({
+          where: {
+            id: partner.id,
+          },
+          data: {
+            name: String(ownerName).trim(),
+            email: email ? String(email).trim() : null,
+          },
+        });
 
-        latitude:
-          latitude !== undefined && latitude !== null && latitude !== ""
-            ? Number(latitude)
-            : null,
+        const updatedSalon = await tx.salon.update({
+          where: {
+            id: salon.id,
+          },
+          data: {
+            ownerName: String(ownerName).trim(),
+            name: String(name).trim(),
+            category: String(category).trim(),
+            address: String(address).trim(),
+            city: String(city).trim(),
+            state: String(state).trim(),
+            pincode: String(pincode).trim(),
 
-        longitude:
-          longitude !== undefined && longitude !== null && longitude !== ""
-            ? Number(longitude)
-            : null,
+            latitude:
+              latitude !== undefined &&
+              latitude !== null &&
+              latitude !== ""
+                ? Number(latitude)
+                : null,
 
-        image: image ? String(image) : null,
+            longitude:
+              longitude !== undefined &&
+              longitude !== null &&
+              longitude !== ""
+                ? Number(longitude)
+                : null,
 
-        aadhaarNumber: String(aadhaarNumber),
-        aadhaarDocument: aadhaarDocument
-          ? String(aadhaarDocument)
-          : null,
+            image: image ? String(image) : null,
 
-        panNumber: String(panNumber),
-        panDocument: panDocument
-          ? String(panDocument)
-          : null,
+            aadhaarNumber: String(aadhaarNumber).trim(),
+            aadhaarDocument: aadhaarDocument
+              ? String(aadhaarDocument)
+              : null,
 
-        status: "PENDING",
-        isLive: true,
-      },
-    });
+            panNumber: String(panNumber).trim(),
+            panDocument: panDocument
+              ? String(panDocument)
+              : null,
+
+            status: "PENDING",
+            rejectionReason: null,
+            isLive: true,
+          },
+        });
+
+        return { updatedPartner, updatedSalon };
+      });
+
+    // Notify admins after successful database update
+    try {
+      await notifyAdminsVerificationSubmitted(
+        updatedPartner.id,
+        updatedSalon.id,
+        updatedSalon.name,
+        "VERIFICATION_RESUBMITTED"
+      );
+    } catch (error) {
+      console.error(
+        "Admin verification resubmission notification error:",
+        error
+      );
+    }
+
+    
+try {
+  await notifyPartnerApplicationPending(
+    updatedPartner.id,
+    updatedSalon.id,
+    updatedSalon.name
+  );
+} catch (error) {
+  console.error(
+    "Partner resubmission pending notification error:",
+    error
+  );
+}
+
 
     return res.json({
       message: "Application resubmitted successfully",
+      partner: updatedPartner,
       salon: updatedSalon,
     });
   } catch (error) {

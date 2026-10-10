@@ -3,12 +3,23 @@ import prisma from "../../../prisma";
 
 const router = Router();
 
-// Get all notifications
-router.get("/", async (_req, res) => {
+// Get Admin notifications
+router.get("/", async (req, res) => {
   try {
+    const adminId = Number(req.query.adminId);
+
+    if (!adminId || Number.isNaN(adminId)) {
+      return res.status(400).json({
+        message: "Valid adminId is required",
+      });
+    }
+
     const notifications = await prisma.notification.findMany({
+      where: { adminId },
       include: {
         user: true,
+        partner: true,
+        admin: true,
       },
       orderBy: {
         createdAt: "desc",
@@ -17,10 +28,10 @@ router.get("/", async (_req, res) => {
 
     return res.json(notifications);
   } catch (error) {
-    console.error(error);
+    console.error("Admin notifications error:", error);
 
     return res.status(500).json({
-      message: "Something went wrong",
+      message: "Failed to fetch notifications",
     });
   }
 });
@@ -35,8 +46,10 @@ router.get("/:id", async (req, res) => {
         id,
       },
       include: {
-        user: true,
-      },
+  user: true,
+  partner: true,
+  admin: true,
+},
     });
 
     if (!notification) {

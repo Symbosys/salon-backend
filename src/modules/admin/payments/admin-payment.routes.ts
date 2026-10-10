@@ -21,7 +21,36 @@ router.get("/", async (_req, res) => {
       },
     });
 
-    return res.json(payments);
+    const formattedPayments = payments.map((payment) => {
+      const booking = payment.booking;
+
+      const amount = Number(booking.amount || 0);
+      const bookingFee = Number(booking.bookingFee || 0);
+      const discount = Number(booking.discount || 0);
+      const totalPaid = Number(booking.finalAmount || 0);
+
+      const salonAmount = amount - discount;
+
+      return {
+        ...payment,
+
+        amount,
+        bookingFee,
+        discount,
+        salonAmount,
+        totalPaid,
+
+        booking: {
+          ...booking,
+          amount,
+          bookingFee,
+          discount,
+          finalAmount: totalPaid,
+        },
+      };
+    });
+
+    return res.json(formattedPayments);
   } catch (error) {
     console.error(error);
 
@@ -30,20 +59,25 @@ router.get("/", async (_req, res) => {
     });
   }
 });
-
 // Get payment by ID
 router.get("/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
 
     const payment = await prisma.payment.findUnique({
-      where: {
-        id,
-      },
+  where: {
+    id,
+  },
+  include: {
+    booking: {
       include: {
-        booking: true,
+        customer: true,
+        salon: true,
+        service: true,
       },
-    });
+    },
+  },
+});
 
     if (!payment) {
       return res.status(404).json({
@@ -51,7 +85,22 @@ router.get("/:id", async (req, res) => {
       });
     }
 
-    return res.json(payment);
+    const booking = payment.booking;
+
+const amount = Number(booking.amount || 0);
+const bookingFee = Number(booking.bookingFee || 0);
+const discount = Number(booking.discount || 0);
+const salonAmount = amount - discount;
+const totalPaid = Number(booking.finalAmount || 0);
+
+return res.json({
+  ...payment,
+
+  salonAmount,
+  bookingFee,
+  discount,
+  totalPaid,
+});
   } catch (error) {
     console.error(error);
 

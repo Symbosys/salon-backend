@@ -3,6 +3,73 @@ import prisma from "../../prisma";
 
 const router = Router();
 
+// ==================================================
+// REGISTER FCM DEVICE TOKEN
+// ==================================================
+router.post("/device-token", async (req, res) => {
+  try {
+    const {
+      token,
+      platform,
+      deviceType,
+      userId,
+      partnerId,
+      adminId,
+    } = req.body;
+
+    if (!token || !platform) {
+      return res.status(400).json({
+        message: "FCM token and platform are required",
+      });
+    }
+
+    const recipientCount = [userId, partnerId, adminId].filter(
+      (id) => id !== undefined && id !== null,
+    ).length;
+
+    if (recipientCount !== 1) {
+      return res.status(400).json({
+        message:
+          "Exactly one recipient is required: userId, partnerId or adminId",
+      });
+    }
+
+    const deviceToken = await prisma.deviceToken.upsert({
+      where: {
+        token: String(token),
+      },
+      update: {
+        platform: String(platform),
+        deviceType: deviceType ? String(deviceType) : null,
+        userId: userId ? Number(userId) : null,
+        partnerId: partnerId ? Number(partnerId) : null,
+        adminId: adminId ? Number(adminId) : null,
+        isActive: true,
+      },
+      create: {
+        token: String(token),
+        platform: String(platform),
+        deviceType: deviceType ? String(deviceType) : null,
+        userId: userId ? Number(userId) : null,
+        partnerId: partnerId ? Number(partnerId) : null,
+        adminId: adminId ? Number(adminId) : null,
+        isActive: true,
+      },
+    });
+
+    return res.status(200).json({
+      message: "FCM device token registered successfully",
+      deviceToken,
+    });
+  } catch (error) {
+    console.error("Register FCM Device Token Error:", error);
+
+    return res.status(500).json({
+      message: "Failed to register FCM device token",
+    });
+  }
+});
+
 // Create notification
 router.post("/", async (req, res) => {
   try {
