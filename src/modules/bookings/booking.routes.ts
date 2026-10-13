@@ -6,53 +6,18 @@ const expireMissedBookings = async () => {
   try {
     const now = new Date();
 
-    // Automatically reject PENDING bookings
-    // if salon does not take any action before appointment time.
-    const pendingBookings = await prisma.booking.findMany({
-      where: {
-        status: "PENDING",
-      },
-    });
-
-    for (const booking of pendingBookings) {
-      if (!booking.date || !booking.time) continue;
-
-      const dateOnly = booking.date.toISOString().split("T")[0];
-
-      const appointmentDateTime = new Date(`${dateOnly} ${booking.time}`);
-
-      if (Number.isNaN(appointmentDateTime.getTime())) continue;
-
-      if (now >= appointmentDateTime) {
-        await prisma.booking.update({
-          where: {
-            id: booking.id,
-          },
-          data: {
-  status: "CANCELLED",
-  cancelledAt: new Date(),
-  cancelReason: "SALON_NOT_ACCEPTED",
-},
-        });
-
-        console.log(
-          `Booking ${booking.bookingId} automatically rejected because salon did not accept it.`,
-        );
-      }
-    }
-
     const bookings = await prisma.booking.findMany({
-      where: {
-        status: "ACCEPTED",
-      },
+  where: {
+    status: "CONFIRMED",
+  },
+  include: {
+    bookingServices: {
       include: {
-        bookingServices: {
-          include: {
-            service: true,
-          },
-        },
+        service: true,
       },
-    });
+    },
+  },
+});
 
     for (const booking of bookings) {
       if (!booking.date || !booking.time) continue;
@@ -289,6 +254,8 @@ router.post("/", async (req, res) => {
 
           finalAmount,
 
+          status: "CONFIRMED",
+
           bookingServices: {
             create: services.map((service) => ({
               serviceId: service.id,
@@ -319,12 +286,12 @@ router.post("/", async (req, res) => {
 
 if (salon.partnerId) {
   await tx.notification.create({
-    data: {
-      partnerId: salon.partnerId,
-      title: "New Booking",
-      message: `New booking ${bookingId} has been received for your salon.`,
-    },
-  });
+  data: {
+    partnerId: salon.partnerId,
+    title: "New Confirmed Booking",
+    message: `Booking ${bookingId} is confirmed for ${dateOnly} at ${time}.`,
+  },
+});
 
   console.log(
     `Partner notification created for partnerId: ${salon.partnerId}`,
@@ -350,18 +317,18 @@ try {
   for (const device of customerTokens) {
     try {
       await sendFcmNotification(
-        device.token,
-        "Booking Request Sent",
-        "Your appointment request has been sent to the salon. You'll be notified once the salon confirms your booking.",
-        {
-          type: "BOOKING_REQUEST_SENT",
-          recipientId: String(customerIdNumber),
-          bookingId: String(bookingId),
-          salonId: String(salonIdNumber),
-          notificationId: "",
-          screen: "BookingDetails",
-        },
-      );
+  device.token,
+  "Booking Confirmed! 🎉",
+  `Your booking ${bookingId} is confirmed for ${dateOnly} at ${time}.`,
+  {
+    type: "BOOKING_CONFIRMED",
+    recipientId: String(customerIdNumber),
+    bookingId: String(bookingId),
+    salonId: String(salonIdNumber),
+    notificationId: "",
+    screen: "BookingDetails",
+  },
+);
     } catch (error) {
       console.error(
         `Customer FCM failed for token ${device.id}:`,
@@ -393,18 +360,18 @@ try {
     for (const device of partnerTokens) {
       try {
         await sendFcmNotification(
-          device.token,
-          "New Booking Request",
-          `You have received a new booking request from ${customerName} for ${dateOnly} at ${time}.`,
-          {
-            type: "NEW_BOOKING",
-            recipientId: String(salon.partnerId),
-            bookingId: String(bookingId),
-            salonId: String(salonIdNumber),
-            notificationId: "",
-            screen: "BookingDetails",
-          },
-        );
+  device.token,
+  "New Confirmed Booking",
+  `${customerName} has booked an appointment for ${dateOnly} at ${time}.`,
+  {
+    type: "BOOKING_CONFIRMED",
+    recipientId: String(salon.partnerId),
+    bookingId: String(bookingId),
+    salonId: String(salonIdNumber),
+    notificationId: "",
+    screen: "BookingDetails",
+  },
+);
       } catch (error) {
         console.error(
           `Partner FCM failed for token ${device.id}:`,
@@ -511,199 +478,16 @@ router.get("/by-booking-id/:bookingId", async (req, res) => {
   }
 });
 
-router.patch("/customer/:customerId/:bookingId/cancel", async (req, res) => {
-  try {
-    const customerId = Number(req.params.customerId);
-    const bookingId = String(req.params.bookingId).trim();
-
-    if (!Number.isInteger(customerId) || !bookingId) {
-      return res.status(400).json({
-        message: "Invalid customer or booking ID",
-      });
-    }
-
-    const booking = await prisma.booking.findFirst({
-      where: {
-        bookingId,
-        customerId,
-      },
+// Customer cancellation is disabled.
+// Only the partner can cancel a confirmed booking.
+router.patch(
+  "/customer/:customerId/:bookingId/cancel",
+  async (_req, res) => {
+    return res.status(403).json({
+      message: "Customer cancellation is disabled.",
     });
-
-    if (!booking) {
-      return res.status(404).json({
-        message: "Booking not found",
-      });
-    }
-
-    // Customer cancellation ONLY for PENDING
-    if (booking.status !== "PENDING") {
-      return res.status(400).json({
-        message: "Only pending bookings can be cancelled by the customer.",
-      });
-    }
-
-    if (!booking.date || !booking.time) {
-      return res.status(400).json({
-        message: "Booking date or time is missing.",
-      });
-    }
-
-    const dateOnly = booking.date.toISOString().split("T")[0];
-
-    const appointmentDateTime = new Date(`${dateOnly} ${booking.time}`);
-
-    const cancelFrom = new Date(appointmentDateTime.getTime() - 15 * 60 * 1000);
-
-    const now = new Date();
-
-    // Before 15-minute window
-    if (now < cancelFrom) {
-      return res.status(400).json({
-        message: "Cancellation is not available yet.",
-      });
-    }
-
-    // Appointment time reached
-    if (now >= appointmentDateTime) {
-      return res.status(400).json({
-        message: "The cancellation window for this booking has expired.",
-      });
-    }
-
-    const updatedBooking = await prisma.$transaction(async (tx) => {
-      const cancelled = await tx.booking.update({
-        where: {
-          id: booking.id,
-        },
-        data: {
-  status: "CANCELLED",
-  cancelledAt: new Date(),
-  cancelReason: "SALON_NOT_ACCEPTED",
-},
-      });
-
-      await prisma.notification.create({
-        data: {
-          userId: booking.customerId,
-          title: "Booking Cancelled",
-          message: `Your booking ${booking.bookingId} was cancelled because the salon did not accept it before the appointment time.`,
-        },
-      });
-
-      // Release slot
-      await tx.availability.updateMany({
-        where: {
-          salonId: booking.salonId,
-          date: {
-            gte: new Date(`${dateOnly}T00:00:00.000Z`),
-            lte: new Date(`${dateOnly}T23:59:59.999Z`),
-          },
-          time: booking.time,
-        },
-        data: {
-          isAvailable: true,
-        },
-      });
-
-      const refundAmount = Number(booking.bookingFee || 0);
-
-      await tx.refund.create({
-        data: {
-          bookingId: booking.id,
-          refundAmount,
-          refundReason: "CUSTOMER_CANCELLED",
-          refundStatus: "PENDING",
-          paymentMethod: null,
-          transactionId: null,
-          refundedAt: null,
-        },
-      });
-
-      await tx.notification.create({
-        data: {
-          userId: booking.customerId,
-          title: "Booking Cancelled",
-          message: `Your booking ${booking.bookingId} has been cancelled successfully.`,
-        },
-      });
-
-      
-      // ===============================
-      // PARTNER: BOOKING CANCELLED BY CUSTOMER
-      // ===============================
-
-      const salon = await tx.salon.findUnique({
-        where: {
-          id: booking.salonId,
-        },
-      });
-
-      if (salon?.partnerId) {
-        const notificationTitle = "Booking Cancelled by Customer";
-        const notificationMessage =
-          `Booking ${booking.bookingId} has been cancelled by the customer.`;
-
-        // Partner in-app notification
-        const partnerNotification = await tx.notification.create({
-          data: {
-            partnerId: salon.partnerId,
-            title: notificationTitle,
-            message: notificationMessage,
-          },
-        });
-
-        // Get active Partner FCM tokens
-        const partnerTokens = await tx.deviceToken.findMany({
-          where: {
-            partnerId: salon.partnerId,
-            isActive: true,
-          },
-        });
-
-        // Send FCM to all Partner devices
-        for (const device of partnerTokens) {
-          try {
-            await sendFcmNotification(
-              device.token,
-              notificationTitle,
-              notificationMessage,
-              {
-                type: "BOOKING_CANCELLED_BY_CUSTOMER",
-                recipientId: String(salon.partnerId),
-                bookingId: String(booking.bookingId),
-                salonId: String(booking.salonId),
-                notificationId: String(partnerNotification.id),
-                screen: "BookingDetails",
-              },
-            );
-          } catch (error) {
-            console.error(
-              `BOOKING_CANCELLED_BY_CUSTOMER FCM failed for token ${device.id}:`,
-              error,
-            );
-          }
-        }
-      }
-
-
-      return cancelled;
-    });
-
-    return res.json({
-      message: "Booking cancelled successfully",
-      booking: updatedBooking,
-      refundAmount: Number(booking.bookingFee || 0),
-      refundStatus: "PENDING",
-    });
-  } catch (error: any) {
-    console.error("Customer Cancel Booking Error:", error);
-
-    return res.status(500).json({
-      message: "Failed to cancel booking",
-      error: error?.message,
-    });
-  }
-});
+  },
+);
 
 // ===============================
 // GET PARTNER DASHBOARD TODAY STATS
@@ -915,13 +699,11 @@ router.patch("/partner/:mobile/:bookingId/status", async (req, res) => {
       .toUpperCase();
 
     const allowedStatuses = [
-      "PENDING",
-      "ACCEPTED",
-      "ARRIVED",
-      "STARTED",
-      "COMPLETED",
-      "CANCELLED",
-    ];
+  "ARRIVED",
+  "STARTED",
+  "COMPLETED",
+  "CANCELLED",
+];
 
     if (!allowedStatuses.includes(status)) {
       return res.status(400).json({
@@ -966,6 +748,20 @@ router.patch("/partner/:mobile/:bookingId/status", async (req, res) => {
       });
     }
 
+    const allowedNextStatuses: Record<string, string[]> = {
+  CONFIRMED: ["ARRIVED", "CANCELLED"],
+  ARRIVED: ["STARTED"],
+  STARTED: ["COMPLETED"],
+  COMPLETED: [],
+  CANCELLED: [],
+};
+
+if (!allowedNextStatuses[booking.status]?.includes(status)) {
+  return res.status(400).json({
+    message: `Cannot change booking status from ${booking.status} to ${status}.`,
+  });
+}
+
     const updatedBooking = await prisma.$transaction(async (tx) => {
       const updated = await tx.booking.update({
         where: {
@@ -974,11 +770,6 @@ router.patch("/partner/:mobile/:bookingId/status", async (req, res) => {
         data: {
   status,
 
-  acceptedAt:
-    status === "ACCEPTED"
-      ? new Date()
-      : booking.acceptedAt,
-
   cancelledAt:
     status === "CANCELLED"
       ? new Date()
@@ -986,50 +777,10 @@ router.patch("/partner/:mobile/:bookingId/status", async (req, res) => {
 
   cancelReason:
     status === "CANCELLED"
-      ? "SALON_REJECTED"
+      ? "SALON_CANCELLED"
       : null,
 },
       });
-
-      if (status === "ACCEPTED") {
-  const notification = await tx.notification.create({
-    data: {
-      userId: booking.customerId,
-      title: "Booking Confirmed! 🎉",
-      message: `Your appointment has been confirmed by the salon.`,
-    },
-  });
-
-  const customerTokens = await tx.deviceToken.findMany({
-    where: {
-      userId: booking.customerId,
-      isActive: true,
-    },
-  });
-
-  for (const device of customerTokens) {
-    try {
-      await sendFcmNotification(
-        device.token,
-        "Booking Confirmed! 🎉",
-        `Your appointment has been confirmed by the salon.`,
-        {
-          type: "BOOKING_CONFIRMED",
-          recipientId: String(booking.customerId),
-          bookingId: String(booking.bookingId),
-          salonId: String(booking.salonId),
-          notificationId: String(notification.id),
-          screen: "BookingDetails",
-        },
-      );
-    } catch (error) {
-      console.error(
-        `Customer FCM failed for token ${device.id}:`,
-        error,
-      );
-    }
-  }
-}
 
 
       if (status === "ARRIVED") {
@@ -1084,10 +835,10 @@ router.patch("/partner/:mobile/:bookingId/status", async (req, res) => {
   const notification = await tx.notification.create({
     data: {
       userId: booking.customerId,
-      title: "Booking Rejected",
+      title: "Booking Cancelled",
       message: `Your appointment request for ${booking.date.toLocaleDateString(
         "en-GB",
-      )} at ${booking.time} was rejected by the salon.`,
+      )} at ${booking.time} was cancelled by the salon.`,
     },
   });
 
@@ -1100,21 +851,23 @@ router.patch("/partner/:mobile/:bookingId/status", async (req, res) => {
 
   for (const device of customerTokens) {
     try {
-      await sendFcmNotification(
-        device.token,
-        "Booking Rejected",
-        `Your appointment request for ${booking.date.toLocaleDateString(
-          "en-GB",
-        )} at ${booking.time} was rejected by the salon.`,
-        {
-          type: "BOOKING_REJECTED",
-          recipientId: String(booking.customerId),
-          bookingId: String(booking.bookingId),
-          salonId: String(booking.salonId),
-          notificationId: String(notification.id),
-          screen: "BookingDetails",
-        },
-      );
+      
+await sendFcmNotification(
+  device.token,
+  "Booking Cancelled",
+  `Your appointment for ${booking.date.toLocaleDateString(
+    "en-GB",
+  )} at ${booking.time} was cancelled by the salon.`,
+  {
+    type: "BOOKING_CANCELLED_BY_SALON",
+    recipientId: String(booking.customerId),
+    bookingId: String(booking.bookingId),
+    salonId: String(booking.salonId),
+    notificationId: String(notification.id),
+    screen: "BookingDetails",
+  },
+);
+
     } catch (error) {
       console.error(
         `Customer FCM failed for token ${device.id}:`,
@@ -1237,7 +990,7 @@ if (status === "COMPLETED") {
             data: {
               bookingId: booking.id,
               refundAmount: Number(booking.bookingFee || 0),
-              refundReason: "SALON_REJECTED",
+              refundReason: "SALON_CANCELLED",
               refundStatus: "PENDING",
               paymentMethod: null,
               transactionId: null,
