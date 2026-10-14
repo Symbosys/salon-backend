@@ -1,5 +1,6 @@
 import { Router } from "express";
 import prisma from "../../../prisma";
+import jwt from "jsonwebtoken";
 
 const router = Router();
 
@@ -38,15 +39,36 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    return res.json({
-      message: "Admin login successful",
-      admin: {
-        id: admin.id,
-        name: admin.name,
-        email: admin.email,
-        status: admin.status,
-      },
-    });
+    
+const secret = process.env.JWT_SECRET;
+
+if (!secret) {
+  return res.status(500).json({
+    message: "JWT_SECRET is not configured",
+  });
+}
+
+const token = jwt.sign(
+  {
+    adminId: admin.id,
+    email: admin.email,
+    role: "admin",
+  },
+  secret,
+  { expiresIn: "8h" }
+);
+
+return res.json({
+  message: "Admin login successful",
+  token,
+  admin: {
+    id: admin.id,
+    name: admin.name,
+    email: admin.email,
+    status: admin.status,
+  },
+});
+
   } catch (error) {
     console.error("Admin Login Error:", error);
 

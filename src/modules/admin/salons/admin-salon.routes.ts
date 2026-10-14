@@ -1,8 +1,102 @@
 import { Router } from "express";
 import prisma from "../../../prisma";
 import { sendFcmNotification } from "../../../services/fcm.service";
-
+import { verifyAdminToken } from "../../../admin-auth.middleware";
 const router = Router();
+router.use(verifyAdminToken);
+
+
+import { v2 as cloudinary } from "cloudinary";
+
+// Admin-authenticated KYC image access
+router.get("/:id/kyc/:documentType", async (req, res) => {
+  try {
+    const salonId = Number(req.params.id);
+    const documentType = req.params.documentType;
+
+    if (
+      !Number.isInteger(salonId) ||
+      !["aadhaar", "pan"].includes(documentType)
+    ) {
+      return res.status(400).json({
+        message: "Invalid salon or document type",
+      });
+    }
+
+    const salon = await prisma.salon.findUnique({
+      where: { id: salonId },
+      select: {
+        aadhaarDocument: true,
+        panDocument: true,
+      },
+    });
+
+    if (!salon) {
+      return res.status(404).json({
+        message: "Salon not found",
+      });
+    }
+
+    const savedUrl =
+      documentType === "aadhaar"
+        ? salon.aadhaarDocument
+        : salon.panDocument;
+
+    if (!savedUrl) {
+      return res.status(404).json({
+        message: "Document not found",
+      });
+    }
+
+    const parsedUrl = new URL(savedUrl);
+const parts = parsedUrl.pathname.split("/").filter(Boolean);
+const imageIndex = parts.findIndex(
+  (part) => part === "authenticated" || part === "upload"
+);
+
+if (imageIndex === -1) {
+  return res.status(400).json({
+    message: "Unsupported Cloudinary URL",
+  });
+}
+
+const assetParts = parts.slice(imageIndex + 1);
+
+if (assetParts[0]?.startsWith("s--")) {
+  assetParts.shift();
+}
+
+if (/^v\d+$/.test(assetParts[0] || "")) {
+  assetParts.shift();
+}
+
+const filePath = assetParts.join("/");
+const publicId = filePath.replace(/\.[^.]+$/, "");
+const extension = filePath.split(".").pop()?.toLowerCase();
+
+if (!publicId || !["jpg", "jpeg", "png", "webp"].includes(extension || "")) {
+  return res.status(400).json({
+    message: "Unsupported document URL",
+  });
+}
+
+    const signedUrl = cloudinary.url(publicId, {
+      type: "authenticated",
+      sign_url: true,
+      secure: true,
+      resource_type: "image",
+      format: extension,
+      expires_at: Math.floor(Date.now() / 1000) + 300,
+    });
+
+    return res.json({ url: signedUrl });
+  } catch (error) {
+    console.error("Admin KYC image error:", error);
+    return res.status(500).json({
+      message: "Unable to access document",
+    });
+  }
+});
 
 
 async function notifyPartnerApplicationStatus(

@@ -690,6 +690,14 @@ router.post("/", async (req, res) => {
 
     const partnerMobile = String(mobile).trim();
 
+    console.log("Registration mobile:", partnerMobile);
+
+const partnerCheck = await prisma.partner.findUnique({
+  where: { mobile: partnerMobile },
+});
+
+console.log("Existing partner found:", partnerCheck);
+
     // --------------------------------------------------
     // Check Partner already exists
     // --------------------------------------------------
