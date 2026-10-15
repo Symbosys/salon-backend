@@ -1,5 +1,4 @@
 import prisma from "../../prisma";
-
 async function seedCategories() {
   const categories = [
     {
@@ -15,7 +14,6 @@ async function seedCategories() {
       icon: "👫",
     },
   ];
-
   for (const category of categories) {
     await prisma.category.upsert({
       where: {
@@ -27,10 +25,8 @@ async function seedCategories() {
       create: category,
     });
   }
-
   console.log("Categories inserted successfully");
 }
-
 seedCategories()
   .catch((error) => {
     console.error("Category seed error:", error);

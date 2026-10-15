@@ -1,11 +1,7 @@
 import { Router } from "express";
 import prisma from "../../prisma";
 import { sendFcmNotification } from "../../services/fcm.service";
-
 const router = Router();
-
-
-
 async function notifyAdminsVerificationSubmitted(
   partnerId: number,
   salonId: number,
@@ -13,20 +9,14 @@ async function notifyAdminsVerificationSubmitted(
   notificationType: "NEW_PARTNER_REGISTRATION" | "VERIFICATION_RESUBMITTED"
 ) {
   const admins = await prisma.admin.findMany();
-
   for (const admin of admins) {
-    
 const isResubmission = notificationType === "VERIFICATION_RESUBMITTED";
-
 const title = isResubmission
   ? "Partner Verification Resubmitted"
   : "New Partner Registration";
-
 const message = isResubmission
   ? `${salonName} has resubmitted verification documents. Please review the application.`
   : `${salonName} has submitted a new partner registration. Please review the application.`;
-
-
     const notification = await prisma.notification.create({
       data: {
         adminId: admin.id,
@@ -34,14 +24,12 @@ const message = isResubmission
         message,
       },
     });
-
     const tokens = await prisma.deviceToken.findMany({
       where: {
         adminId: admin.id,
         isActive: true,
       },
     });
-
     for (const device of tokens) {
       try {
         await sendFcmNotification(
@@ -66,8 +54,6 @@ const message = isResubmission
     }
   }
 }
-
-
 async function notifyPartnerApplicationPending(
   partnerId: number,
   salonId: number,
@@ -75,7 +61,6 @@ async function notifyPartnerApplicationPending(
 ) {
   const title = "Application Submitted Successfully";
   const message = `Your salon ${salonName} application has been submitted and is pending admin approval.`;
-
   const notification = await prisma.notification.create({
     data: {
       partnerId,
@@ -83,17 +68,14 @@ async function notifyPartnerApplicationPending(
       message,
     },
   });
-
   const devices = await prisma.deviceToken.findMany({
     where: {
       partnerId,
       isActive: true,
     },
   });
-
   console.log("PENDING NOTIFICATION PARTNER ID:", partnerId);
 console.log("PARTNER DEVICES FOUND:", devices.length);
-
   for (const device of devices) {
     try {
       await sendFcmNotification(
@@ -117,27 +99,18 @@ console.log("PARTNER DEVICES FOUND:", devices.length);
     }
   }
 }
-
-
-
 const partnerOtps = new Map<string, string>();
-
 router.post("/partner/send-otp", async (req, res) => {
   try {
     const mobile = String(req.body.mobile || "").trim();
-
     if (!/^\d{10}$/.test(mobile)) {
       return res.status(400).json({
         message: "Enter a valid 10-digit mobile number",
       });
     }
-
     const otp = "1234";
-
     partnerOtps.set(mobile, otp);
-
     console.log(`Partner OTP for ${mobile}: ${otp}`);
-
     return res.json({
       message: "OTP sent successfully",
     });
@@ -148,22 +121,17 @@ router.post("/partner/send-otp", async (req, res) => {
     });
   }
 });
-
 router.post("/partner/verify-otp", async (req, res) => {
   try {
     const mobile = String(req.body.mobile || "").trim();
     const otp = String(req.body.otp || "").trim();
-
     const savedOtp = partnerOtps.get(mobile);
-
     if (!savedOtp || savedOtp !== otp) {
       return res.status(400).json({
         message: "Invalid OTP",
       });
     }
-
     partnerOtps.delete(mobile);
-
     return res.json({
       message: "Mobile number verified successfully",
       verified: true,
@@ -175,73 +143,52 @@ router.post("/partner/verify-otp", async (req, res) => {
     });
   }
 });
-
-// ======================================================
-// REVERSE GEOCODING - OLA MAPS
-// ======================================================
-
 router.get("/reverse-geocode", async (req, res) => {
   try {
     const latitude = Number(req.query.latitude);
     const longitude = Number(req.query.longitude);
-
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
       return res.status(400).json({
         message: "Valid latitude and longitude are required",
       });
     }
-
     const apiKey = process.env.OLA_MAPS_API_KEY;
-
     if (!apiKey) {
       return res.status(500).json({
         message: "Ola Maps API key is not configured",
       });
     }
-
     const olaUrl =
   `https://api.olamaps.io/places/v1/reverse-geocode` +
   `?latlng=${encodeURIComponent(`${latitude},${longitude}`)}` +
   `&api_key=${encodeURIComponent(apiKey)}`;
-
 console.log("========== OLA REQUEST ==========");
 console.log("Latitude:", latitude);
 console.log("Longitude:", longitude);
 console.log("Ola URL:", olaUrl);
 console.log("=================================");
-
     const response = await fetch(olaUrl, {
       method: "GET",
       headers: {
         "X-Request-Id": `reverse-${Date.now()}`,
       },
     });
-
     const data = await response.json();
-
     console.log("Ola Reverse Geocode:", response.status, data);
-
     if (!response.ok) {
       return res.status(response.status).json({
         message: "Ola Maps reverse geocoding failed",
         details: data,
       });
     }
-
     return res.json(data);
   } catch (error) {
     console.error("Reverse Geocode Error:", error);
-
     return res.status(500).json({
       message: "Unable to reverse geocode location",
     });
   }
 });
-
-// ======================================================
-// GET ALL SALONS
-// ======================================================
-
 router.get("/", async (_req, res) => {
   try {
     const salons = await prisma.salon.findMany({
@@ -255,16 +202,13 @@ router.get("/", async (_req, res) => {
         reviews: true,
       },
     });
-
     const formattedSalons = salons.map((salon) => {
       const ratings = salon.reviews.map((review) => review.rating);
-
       const averageRating =
         ratings.length > 0
           ? ratings.reduce((sum, rating) => sum + rating, 0) /
             ratings.length
           : 0;
-
       return {
         id: salon.id,
         name: salon.name,
@@ -277,6 +221,7 @@ router.get("/", async (_req, res) => {
         longitude: salon.longitude,
         status: salon.status,
         isLive: salon.isLive,
+        liveOffCount: salon.liveOffCount,
         image: salon.image,
         services: salon.services,
         staff: salon.staff,
@@ -284,31 +229,22 @@ router.get("/", async (_req, res) => {
         reviewCount: salon.reviews.length,
       };
     });
-
     return res.json(formattedSalons);
   } catch (error) {
     console.error("Get Salons Error:", error);
-
     return res.status(500).json({
       message: "Something went wrong",
     });
   }
 });
-
-// ======================================================
-// PARTNER REGISTRATION
-// ======================================================
-
 router.get("/partner/:mobile", async (req, res) => {
   try {
     const mobile = String(req.params.mobile).trim();
-
     if (!mobile) {
       return res.status(400).json({
         message: "Mobile number is required",
       });
     }
-
     const partner = await prisma.partner.findUnique({
       where: {
         mobile,
@@ -317,16 +253,13 @@ router.get("/partner/:mobile", async (req, res) => {
         salons: true,
       },
     });
-
     if (!partner) {
       return res.status(404).json({
         registered: false,
         message: "Partner not registered",
       });
     }
-
     const salon = partner.salons[0] ?? null;
-
     return res.json({
       registered: true,
       partner,
@@ -334,75 +267,82 @@ router.get("/partner/:mobile", async (req, res) => {
     });
   } catch (error) {
     console.error("Check Partner Error:", error);
-
     return res.status(500).json({
       message: "Something went wrong",
     });
   }
 });
-
-// Partner Live / Offline
 router.patch("/partner/:mobile/live", async (req, res) => {
   try {
     const mobile = String(req.params.mobile).trim();
     const { isLive } = req.body;
-
+    if (typeof isLive !== "boolean") {
+      return res.status(400).json({
+        message: "isLive must be a boolean",
+      });
+    }
     const partner = await prisma.partner.findUnique({
-      where: {
-        mobile,
-      },
+      where: { mobile },
     });
-
     if (!partner) {
       return res.status(404).json({
         message: "Partner not found",
       });
     }
-
     const salon = await prisma.salon.findFirst({
       where: {
         partnerId: partner.id,
       },
     });
-
     if (!salon) {
       return res.status(404).json({
         message: "Salon not found",
       });
     }
-
-    
-
-    const updatedSalon = await prisma.salon.update({
-      where: {
-        id: salon.id,
-      },
-      data: {
-        isLive: Boolean(isLive),
-      },
-    });
-
+    let updatedSalon;
+    if (isLive === false) {
+      const result = await prisma.salon.updateMany({
+        where: {
+          id: salon.id,
+          isLive: true,
+        },
+        data: {
+          isLive: false,
+          liveOffCount: {
+            increment: 1,
+          },
+        },
+      });
+      updatedSalon = await prisma.salon.findUnique({
+        where: { id: salon.id },
+      });
+      if (!updatedSalon) {
+        return res.status(404).json({
+          message: "Salon not found",
+        });
+      }
+    } else {
+      updatedSalon = await prisma.salon.update({
+        where: { id: salon.id },
+        data: {
+          isLive: true,
+        },
+      });
+    }
     return res.json({
       message: "Salon live status updated successfully",
       salon: updatedSalon,
     });
   } catch (error) {
     console.error("Partner Live Status Error:", error);
-
     return res.status(500).json({
       message: "Something went wrong",
     });
   }
 });
-
-// ======================================================
-// UPDATE PARTNER SALON LOCATION
-// ======================================================
-
 router.patch("/partner/:mobile/location", async (req, res) => {
   try {
     const mobile = String(req.params.mobile).trim();
-
     const {
       address,
       city,
@@ -411,13 +351,11 @@ router.patch("/partner/:mobile/location", async (req, res) => {
       latitude,
       longitude,
     } = req.body;
-
     if (!mobile) {
       return res.status(400).json({
         message: "Partner mobile is required",
       });
     }
-
     if (
       latitude === undefined ||
       latitude === null ||
@@ -428,31 +366,26 @@ router.patch("/partner/:mobile/location", async (req, res) => {
         message: "Latitude and longitude are required",
       });
     }
-
     const partner = await prisma.partner.findUnique({
       where: {
         mobile,
       },
     });
-
     if (!partner) {
       return res.status(404).json({
         message: "Partner not found",
       });
     }
-
     const salon = await prisma.salon.findFirst({
       where: {
         partnerId: partner.id,
       },
     });
-
     if (!salon) {
       return res.status(404).json({
         message: "Salon not found",
       });
     }
-
     const updatedSalon = await prisma.salon.update({
       where: {
         id: salon.id,
@@ -466,28 +399,20 @@ router.patch("/partner/:mobile/location", async (req, res) => {
         longitude: Number(longitude),
       },
     });
-
     return res.json({
       message: "Salon location updated successfully",
       salon: updatedSalon,
     });
   } catch (error) {
     console.error("Partner Location Update Error:", error);
-
     return res.status(500).json({
       message: "Something went wrong",
     });
   }
 });
-
-// ======================================================
-// UPDATE CUSTOMER LOCATION
-// ======================================================
-
 router.patch("/customer/:customerId/location", async (req, res) => {
   try {
     const customerId = Number(req.params.customerId);
-
     const {
       address,
       city,
@@ -496,13 +421,11 @@ router.patch("/customer/:customerId/location", async (req, res) => {
       latitude,
       longitude,
     } = req.body;
-
     if (!Number.isInteger(customerId)) {
       return res.status(400).json({
         message: "Invalid customer ID",
       });
     }
-
     if (
       latitude === undefined ||
       latitude === null ||
@@ -513,19 +436,16 @@ router.patch("/customer/:customerId/location", async (req, res) => {
         message: "Latitude and longitude are required",
       });
     }
-
     const customer = await prisma.user.findUnique({
       where: {
         id: customerId,
       },
     });
-
     if (!customer) {
       return res.status(404).json({
         message: "Customer not found",
       });
     }
-
     const updatedCustomer = await prisma.user.update({
       where: {
         id: customerId,
@@ -539,28 +459,20 @@ router.patch("/customer/:customerId/location", async (req, res) => {
         longitude: Number(longitude),
       },
     });
-
     return res.json({
       message: "Customer location updated successfully",
       customer: updatedCustomer,
     });
   } catch (error) {
     console.error("Customer Location Update Error:", error);
-
     return res.status(500).json({
       message: "Something went wrong",
     });
   }
 });
-
-// ======================================================
-// UPDATE PARTNER SALON PROFILE
-// ======================================================
-
 router.put("/partner/:mobile/profile", async (req, res) => {
   try {
     const mobile = String(req.params.mobile).trim();
-
     const {
       name,
       ownerName,
@@ -570,43 +482,36 @@ router.put("/partner/:mobile/profile", async (req, res) => {
       state,
       pincode,
     } = req.body;
-
     if (!mobile) {
       return res.status(400).json({
         message: "Partner mobile is required",
       });
     }
-
     if (!name || !ownerName || !email || !address) {
       return res.status(400).json({
         message: "Required profile details are missing",
       });
     }
-
     const partner = await prisma.partner.findUnique({
       where: {
         mobile,
       },
     });
-
     if (!partner) {
       return res.status(404).json({
         message: "Partner not found",
       });
     }
-
     const salon = await prisma.salon.findFirst({
       where: {
         partnerId: partner.id,
       },
     });
-
     if (!salon) {
       return res.status(404).json({
         message: "Salon not found",
       });
     }
-
     const updatedPartner = await prisma.partner.update({
       where: {
         id: partner.id,
@@ -616,7 +521,6 @@ router.put("/partner/:mobile/profile", async (req, res) => {
         email: String(email),
       },
     });
-
     const updatedSalon = await prisma.salon.update({
       where: {
         id: salon.id,
@@ -630,7 +534,6 @@ router.put("/partner/:mobile/profile", async (req, res) => {
         pincode: pincode ? String(pincode) : salon.pincode,
       },
     });
-
     return res.json({
       message: "Profile updated successfully",
       partner: updatedPartner,
@@ -638,13 +541,11 @@ router.put("/partner/:mobile/profile", async (req, res) => {
     });
   } catch (error) {
     console.error("Update Partner Profile Error:", error);
-
     return res.status(500).json({
       message: "Something went wrong",
     });
   }
 });
-
 router.post("/", async (req, res) => {
   try {
     const {
@@ -660,18 +561,11 @@ router.post("/", async (req, res) => {
       longitude,
       image,
       ownerName,
-
-      // KYC
       aadhaarNumber,
       aadhaarDocument,
       panNumber,
       panDocument,
     } = req.body;
-
-    // --------------------------------------------------
-    // Validate required fields
-    // --------------------------------------------------
-
     if (
       !mobile ||
       !name ||
@@ -687,31 +581,17 @@ router.post("/", async (req, res) => {
         message: "Required registration and KYC details are missing",
       });
     }
-
     const partnerMobile = String(mobile).trim();
-
     console.log("Registration mobile:", partnerMobile);
-
 const partnerCheck = await prisma.partner.findUnique({
   where: { mobile: partnerMobile },
 });
-
 console.log("Existing partner found:", partnerCheck);
-
-    // --------------------------------------------------
-    // Check Partner already exists
-    // --------------------------------------------------
-
     let partner = await prisma.partner.findUnique({
       where: {
         mobile: partnerMobile,
       },
     });
-
-    // --------------------------------------------------
-    // Create Partner if new
-    // --------------------------------------------------
-
 if (!partner) {
   partner = await prisma.partner.create({
     data: {
@@ -721,17 +601,11 @@ if (!partner) {
     },
   });
 }
-
-    // --------------------------------------------------
-    // Check if Partner already has a Salon
-    // --------------------------------------------------
-
     const existingSalon = await prisma.salon.findFirst({
       where: {
         partnerId: partner.id,
       },
     });
-
     if (existingSalon) {
       return res.status(409).json({
         message: "Partner is already registered",
@@ -739,62 +613,42 @@ if (!partner) {
         salon: existingSalon,
       });
     }
-
-    // --------------------------------------------------
-    // Create Salon
-    // --------------------------------------------------
-
     const salon = await prisma.salon.create({
       data: {
-        // Partner is the owner of this salon
         partnerId: partner.id,
-
-        // Existing ownerId is kept null for Partner registration
         ownerId: null,
         ownerName: String(ownerName),
-
         name: String(name),
         category: String(category),
         address: String(address),
         city: String(city),
         state: String(state),
         pincode: String(pincode),
-
         latitude:
           latitude !== undefined &&
           latitude !== null &&
           latitude !== ""
             ? Number(latitude)
             : null,
-
         longitude:
           longitude !== undefined &&
           longitude !== null &&
           longitude !== ""
             ? Number(longitude)
             : null,
-
         image: image ? String(image) : null,
-
-        // KYC
         aadhaarNumber: String(aadhaarNumber),
-
         aadhaarDocument: aadhaarDocument
           ? String(aadhaarDocument)
           : null,
-
         panNumber: String(panNumber),
-
         panDocument: panDocument
           ? String(panDocument)
           : null,
-
-        // New registration always goes for verification
         status: "PENDING",
         isLive: true,
       },
     });
-
     try {
   await notifyAdminsVerificationSubmitted(
   partner.id,
@@ -808,8 +662,6 @@ if (!partner) {
     error
   );
 }
-
-
 try {
   await notifyPartnerApplicationPending(
     partner.id,
@@ -822,8 +674,6 @@ try {
     error
   );
 }
-
-
     return res.status(201).json({
       message: "Registration submitted successfully",
       partner,
@@ -831,18 +681,14 @@ try {
     });
   } catch (error) {
     console.error("Partner Registration Error:", error);
-
     return res.status(500).json({
       message: "Something went wrong",
     });
   }
 });
-
-
 router.put("/partner/:mobile/resubmit", async (req, res) => {
   try {
     const mobile = String(req.params.mobile).trim();
-
     const {
       name,
       ownerName,
@@ -860,7 +706,6 @@ router.put("/partner/:mobile/resubmit", async (req, res) => {
       panNumber,
       panDocument,
     } = req.body;
-
     if (
       !mobile ||
       !name ||
@@ -877,36 +722,29 @@ router.put("/partner/:mobile/resubmit", async (req, res) => {
         message: "Required registration and KYC details are missing",
       });
     }
-
     const partner = await prisma.partner.findUnique({
       where: { mobile },
     });
-
     if (!partner) {
       return res.status(404).json({
         message: "Partner not found",
       });
     }
-
     const salon = await prisma.salon.findFirst({
       where: {
         partnerId: partner.id,
       },
     });
-
     if (!salon) {
       return res.status(404).json({
         message: "Salon registration not found",
       });
     }
-
     if (salon.status !== "REJECTED") {
       return res.status(400).json({
         message: "Only rejected applications can be resubmitted",
       });
     }
-
-    // Update Partner and Salon together
     const { updatedPartner, updatedSalon } =
       await prisma.$transaction(async (tx) => {
         const updatedPartner = await tx.partner.update({
@@ -918,7 +756,6 @@ router.put("/partner/:mobile/resubmit", async (req, res) => {
             email: email ? String(email).trim() : null,
           },
         });
-
         const updatedSalon = await tx.salon.update({
           where: {
             id: salon.id,
@@ -931,43 +768,34 @@ router.put("/partner/:mobile/resubmit", async (req, res) => {
             city: String(city).trim(),
             state: String(state).trim(),
             pincode: String(pincode).trim(),
-
             latitude:
               latitude !== undefined &&
               latitude !== null &&
               latitude !== ""
                 ? Number(latitude)
                 : null,
-
             longitude:
               longitude !== undefined &&
               longitude !== null &&
               longitude !== ""
                 ? Number(longitude)
                 : null,
-
             image: image ? String(image) : null,
-
             aadhaarNumber: String(aadhaarNumber).trim(),
             aadhaarDocument: aadhaarDocument
               ? String(aadhaarDocument)
               : null,
-
             panNumber: String(panNumber).trim(),
             panDocument: panDocument
               ? String(panDocument)
               : null,
-
             status: "PENDING",
             rejectionReason: null,
             isLive: true,
           },
         });
-
         return { updatedPartner, updatedSalon };
       });
-
-    // Notify admins after successful database update
     try {
       await notifyAdminsVerificationSubmitted(
         updatedPartner.id,
@@ -980,9 +808,7 @@ router.put("/partner/:mobile/resubmit", async (req, res) => {
         "Admin verification resubmission notification error:",
         error
       );
-    }
-
-    
+    }   
 try {
   await notifyPartnerApplicationPending(
     updatedPartner.id,
@@ -995,8 +821,6 @@ try {
     error
   );
 }
-
-
     return res.json({
       message: "Application resubmitted successfully",
       partner: updatedPartner,
@@ -1004,11 +828,9 @@ try {
     });
   } catch (error) {
     console.error("Partner Resubmit Error:", error);
-
     return res.status(500).json({
       message: "Something went wrong",
     });
   }
 });
-
 export default router;

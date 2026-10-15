@@ -1,18 +1,15 @@
 generator client {
   provider = "prisma-client-js"
 }
-
 datasource db {
   provider = "postgresql"
 }
-
 model User {
   id        Int      @id @default(autoincrement())
   name      String
   mobile    String   @unique
   email     String?
   role      String   @default("CUSTOMER")
-
   address   String?
   city      String?
   state     String?
@@ -20,9 +17,7 @@ model User {
   pincode   String?
   latitude  Float?
   longitude Float?
-
   createdAt DateTime @default(now())
-
   salons         Salon[]
   bookings       Booking[]
   reviews        Review[]
@@ -30,7 +25,6 @@ model User {
   favorites      Favorite[]
   deviceTokens   DeviceToken[]
 }
-
 model Partner {
   id            Int            @id @default(autoincrement())
   name          String
@@ -38,24 +32,17 @@ model Partner {
   email         String?
   status        String         @default("ACTIVE")
   createdAt     DateTime       @default(now())
-
   salons        Salon[]
   notifications Notification[]
   deviceTokens  DeviceToken[]
 }
-
 model Salon {
   id        Int      @id @default(autoincrement())
-
-  // Existing owner relation
   ownerId   Int?
   owner     User?    @relation(fields: [ownerId], references: [id])
-
-  // Partner relation
   partnerId Int?
   partner   Partner? @relation(fields: [partnerId], references: [id])
   ownerName String?
-
   name      String
   category  String   @default("Unisex Salon")
   address   String
@@ -67,14 +54,12 @@ model Salon {
   status    String   @default("PENDING")
   rejectionReason String?
   isLive    Boolean  @default(false)
-
+  liveOffCount Int     @default(0)
   aadhaarNumber   String?
   aadhaarDocument String?
   panNumber       String?
   panDocument     String?
-
   createdAt DateTime @default(now())
-
   services       Service[]
   staff          Staff[]
   bookings       Booking[]
@@ -82,11 +67,9 @@ model Salon {
   reviews        Review[]
   availabilities Availability[]
   settlements    Settlement[]
-
   image     String?
   favorites Favorite[]
 }
-
 model Service {
   id        Int      @id @default(autoincrement())
   salonId   Int
@@ -98,12 +81,10 @@ model Service {
   isActive  Boolean  @default(true)
   isDeleted Boolean @default(false)
   createdAt DateTime @default(now())
-
   salon     Salon     @relation(fields: [salonId], references: [id])
   bookings  Booking[]
   bookingServices BookingService[]
 }
-
 model Staff {
   id        Int      @id @default(autoincrement())
   salonId   Int
@@ -112,11 +93,9 @@ model Staff {
   status    String   @default("AVAILABLE")
   isDeleted Boolean @default(false)
   createdAt DateTime @default(now())
-
   salon     Salon    @relation(fields: [salonId], references: [id])
   bookings  Booking[]
 }
-
 model Booking {
   id          Int      @id @default(autoincrement())
   bookingId   String   @unique
@@ -134,12 +113,10 @@ model Booking {
   createdAt   DateTime @default(now())
   acceptedAt   DateTime?
 cancelledAt  DateTime?
-
   customer    User     @relation(fields: [customerId], references: [id])
   salon       Salon    @relation(fields: [salonId], references: [id])
   service     Service  @relation(fields: [serviceId], references: [id])
   staff       Staff?   @relation(fields: [staffId], references: [id])
-
   payment Payment?
   reviews   Review[]
   settlement Settlement?
@@ -148,7 +125,6 @@ cancelledAt  DateTime?
   cancelReason String?
   refunds Refund[]
 }
-
 model Payment {
   id            Int      @id @default(autoincrement())
   bookingId     Int      @unique
@@ -157,10 +133,8 @@ model Payment {
   status        String   @default("PENDING")
   transactionId String?
   createdAt     DateTime @default(now())
-
   booking       Booking  @relation(fields: [bookingId], references: [id])
 }
-
 model Offer {
   id          Int       @id @default(autoincrement())
   salonId     Int
@@ -170,10 +144,8 @@ model Offer {
   isActive    Boolean   @default(true)
   deletedAt   DateTime?
   createdAt   DateTime  @default(now())
-
   salon       Salon     @relation(fields: [salonId], references: [id])
 }
-
 model Review {
   id         Int      @id @default(autoincrement())
   bookingId  Int      @unique
@@ -182,30 +154,23 @@ model Review {
   rating     Int
   comment    String?
   createdAt  DateTime @default(now())
-
   booking    Booking  @relation(fields: [bookingId], references: [id])
   customer   User     @relation(fields: [customerId], references: [id])
   salon      Salon    @relation(fields: [salonId], references: [id])
 }
-
-
 model Notification {
   id        Int      @id @default(autoincrement())
   userId    Int?
   partnerId Int?
   adminId   Int?
-
   title     String
   message   String
   isRead    Boolean  @default(false)
   createdAt DateTime @default(now())
-
   user      User?    @relation(fields: [userId], references: [id])
   partner   Partner? @relation(fields: [partnerId], references: [id])
   admin     Admin?   @relation(fields: [adminId], references: [id])
 }
-
-
 model Availability {
   id        Int      @id @default(autoincrement())
   salonId   Int
@@ -213,10 +178,8 @@ model Availability {
   time      String
   isAvailable Boolean @default(true)
   createdAt DateTime @default(now())
-
   salon     Salon    @relation(fields: [salonId], references: [id])
 }
-
 model Settlement {
   id            Int      @id @default(autoincrement())
   bookingId     Int      @unique
@@ -226,11 +189,9 @@ model Settlement {
   partnerAmount Float
   status        String   @default("PENDING")
   createdAt     DateTime @default(now())
-
   booking       Booking  @relation(fields: [bookingId], references: [id])
   salon         Salon    @relation(fields: [salonId], references: [id])
 }
-
 model Category {
   id        Int      @id @default(autoincrement())
   name      String   @unique
@@ -238,30 +199,23 @@ model Category {
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
 }
-
 model BookingService {
   id        Int      @id @default(autoincrement())
   bookingId Int
   serviceId Int
-
   booking   Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
   service   Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
-
   @@unique([bookingId, serviceId])
 }
-
 model Favorite {
   id        Int      @id @default(autoincrement())
   userId    Int
   salonId   Int
   createdAt DateTime @default(now())
-
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   salon     Salon    @relation(fields: [salonId], references: [id], onDelete: Cascade)
-
   @@unique([userId, salonId])
 }
-
 model Refund {
   id              Int      @id @default(autoincrement())
   bookingId       Int
@@ -272,10 +226,8 @@ model Refund {
   transactionId   String?
   refundedAt      DateTime?
   createdAt       DateTime @default(now())
-
   booking         Booking  @relation(fields: [bookingId], references: [id])
 }
-
 model Admin {
   id        Int      @id @default(autoincrement())
   name      String
@@ -286,7 +238,6 @@ model Admin {
   deviceTokens DeviceToken[]
   notifications Notification[]
 }
-
 model DeviceToken {
   id         Int      @id @default(autoincrement())
   token      String   @unique
@@ -298,11 +249,9 @@ model DeviceToken {
   isActive   Boolean  @default(true)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
-
   user       User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
   partner    Partner? @relation(fields: [partnerId], references: [id], onDelete: Cascade)
   admin      Admin?   @relation(fields: [adminId], references: [id], onDelete: Cascade)
-
   @@index([userId])
   @@index([partnerId])
   @@index([adminId])

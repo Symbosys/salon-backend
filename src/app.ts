@@ -32,15 +32,9 @@ import adminRefundRoutes from "./modules/admin/refunds/admin-refund.routes";
 import adminPartnerRoutes from "./modules/admin/partners/admin-partner.routes";
 import adminAuthRoutes from "./modules/admin/auth/admin-auth.routes";
 import path from "path";
-
 dotenv.config();
-
 const app = express();
-app.use(
-  "/uploads",
-  express.static(path.join(process.cwd(), "uploads"))
-);
-
+app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 app.use(cors());
 app.use(express.json());
 app.use("/api/auth", authRoutes);
@@ -73,16 +67,12 @@ app.use("/api/uploads", uploadRoutes);
 app.use("/api/admin/refunds", adminRefundRoutes);
 app.use("/api/admin/partners", adminPartnerRoutes);
 app.use("/api/admin/auth", adminAuthRoutes);
-
-
 app.get("/", (_req, res) => {
   res.json({
     message: "Salon Backend API is running",
   });
 });
-
 const PORT = 5000;
-
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });

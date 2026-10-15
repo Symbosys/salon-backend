@@ -1,10 +1,7 @@
 import { Router } from "express";
 import prisma from "../../../prisma";
 import { sendFcmNotification } from "../../../services/fcm.service";
-
 const router = Router();
-
-// Get all customers
 router.get("/", async (_req, res) => {
   try {
     const customers = await prisma.user.findMany({
@@ -16,20 +13,18 @@ router.get("/", async (_req, res) => {
       },
       include: {
         bookings: {
-  select: {
-    id: true,
-    bookingFee: true,
-  },
-},
+          select: {
+            id: true,
+            bookingFee: true,
+          },
+        },
       },
     });
-
     const formattedCustomers = customers.map((customer) => {
-     const totalSpent = customer.bookings.reduce(
-  (total, booking) => total + Number(booking.bookingFee || 0),
-  0
-);
-
+      const totalSpent = customer.bookings.reduce(
+        (total, booking) => total + Number(booking.bookingFee || 0),
+        0,
+      );
       return {
         id: customer.id,
         name: customer.name,
@@ -42,28 +37,22 @@ router.get("/", async (_req, res) => {
         spent: totalSpent,
       };
     });
-
     return res.json(formattedCustomers);
   } catch (error) {
     console.error("Get Customers Error:", error);
-
     return res.status(500).json({
       message: "Failed to fetch customers",
     });
   }
 });
-
-// Get customer by ID
 router.get("/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
-
     if (!id) {
       return res.status(400).json({
         message: "Invalid customer ID",
       });
     }
-
     const customer = await prisma.user.findFirst({
       where: {
         id,
@@ -84,36 +73,28 @@ router.get("/:id", async (req, res) => {
         notifications: true,
       },
     });
-
     if (!customer) {
       return res.status(404).json({
         message: "Customer not found",
       });
     }
-
     return res.json(customer);
   } catch (error) {
     console.error("Get Customer Error:", error);
-
     return res.status(500).json({
       message: "Failed to fetch customer",
     });
   }
 });
-
-// Update customer
 router.patch("/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
-
     if (!id) {
       return res.status(400).json({
         message: "Invalid customer ID",
       });
     }
-
     const { name, mobile, email } = req.body;
-
     const customer = await prisma.user.update({
       where: {
         id,
@@ -124,58 +105,46 @@ router.patch("/:id", async (req, res) => {
         email,
       },
     });
-
     return res.json(customer);
   } catch (error) {
     console.error("Update Customer Error:", error);
-
     return res.status(500).json({
       message: "Failed to update customer",
     });
   }
 });
-
-// Delete customer
 router.delete("/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
-
     if (!id) {
       return res.status(400).json({
         message: "Invalid customer ID",
       });
     }
-
     const customer = await prisma.user.delete({
       where: {
         id,
       },
     });
-
     return res.json({
       message: "Customer deleted successfully",
       customer,
     });
   } catch (error) {
     console.error("Delete Customer Error:", error);
-
     return res.status(500).json({
       message: "Failed to delete customer",
     });
   }
 });
-
-// Get customer account status
 router.get("/:id/status", async (req, res) => {
   try {
     const customerId = Number(req.params.id);
-
     if (!Number.isInteger(customerId)) {
       return res.status(400).json({
         message: "Invalid customer ID",
       });
     }
-
     const customer = await prisma.user.findFirst({
       where: {
         id: customerId,
@@ -186,86 +155,59 @@ router.get("/:id/status", async (req, res) => {
         status: true,
       },
     });
-
     if (!customer) {
       return res.status(404).json({
         message: "Customer not found",
       });
     }
-
     return res.json({
       id: customer.id,
       status: customer.status,
     });
   } catch (error) {
     console.error("Get Customer Status Error:", error);
-
     return res.status(500).json({
       message: "Failed to fetch customer status",
     });
   }
 });
-
 router.patch("/:id/status", async (req, res) => {
   try {
     const customerId = Number(req.params.id);
     const { status } = req.body;
-
     if (!Number.isInteger(customerId)) {
       return res.status(400).json({
         message: "Invalid customer ID",
       });
     }
-
     if (!["ACTIVE", "SUSPENDED"].includes(status)) {
       return res.status(400).json({
         message: "Status must be ACTIVE or SUSPENDED",
       });
     }
-
     const customer = await prisma.user.findUnique({
       where: { id: customerId },
     });
-
     if (!customer) {
       return res.status(404).json({
         message: "Customer not found",
       });
     }
-
     const updatedCustomer = await prisma.user.update({
       where: { id: customerId },
       data: {
         status,
       },
     });
-
-    // ==========================================================
-    // CUSTOMER ACCOUNT STATUS NOTIFICATION
-    // ==========================================================
-
     const isSuspended = status === "SUSPENDED";
-
-    const title = isSuspended
-      ? "Account Suspended"
-      : "Account Reactivated";
-
+    const title = isSuspended ? "Account Suspended" : "Account Reactivated";
     const message = isSuspended
       ? "Your account has been suspended. Please contact support for more information."
       : "Your account has been reactivated. You can now use SalonApp again.";
-
     const notificationType = isSuspended
       ? "CUSTOMER_ACCOUNT_SUSPENDED"
       : "CUSTOMER_ACCOUNT_REACTIVATED";
-
-    const screen = isSuspended
-      ? "AccountSuspended"
-      : "Home";
-
-    // ==========================================================
-    // IN-APP NOTIFICATION
-    // ==========================================================
-
+    const screen = isSuspended ? "AccountSuspended" : "Home";
     const notification = await prisma.notification.create({
       data: {
         userId: customerId,
@@ -273,39 +215,24 @@ router.patch("/:id/status", async (req, res) => {
         message,
       },
     });
-
-    // ==========================================================
-    // FCM PUSH NOTIFICATION
-    // ==========================================================
-
     const customerTokens = await prisma.deviceToken.findMany({
       where: {
         userId: customerId,
         isActive: true,
       },
     });
-
     for (const device of customerTokens) {
       try {
-        await sendFcmNotification(
-          device.token,
-          title,
-          message,
-          {
-            type: notificationType,
-            recipientId: String(customerId),
-            notificationId: String(notification.id),
-            screen,
-          },
-        );
+        await sendFcmNotification(device.token, title, message, {
+          type: notificationType,
+          recipientId: String(customerId),
+          notificationId: String(notification.id),
+          screen,
+        });
       } catch (error) {
-        console.error(
-          `Customer FCM failed for token ${device.id}:`,
-          error,
-        );
+        console.error(`Customer FCM failed for token ${device.id}:`, error);
       }
     }
-
     return res.json({
       message: isSuspended
         ? "Customer suspended successfully"
@@ -314,11 +241,9 @@ router.patch("/:id/status", async (req, res) => {
     });
   } catch (error) {
     console.error("Update Customer Status Error:", error);
-
     return res.status(500).json({
       message: "Failed to update customer status",
     });
   }
 });
-
 export default router;

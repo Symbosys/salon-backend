@@ -1,58 +1,44 @@
 import { Router } from "express";
 import prisma from "../../prisma";
 import { sendFcmNotification } from "../../services/fcm.service";
-
 const expireMissedBookings = async () => {
   try {
     const now = new Date();
-
     const bookings = await prisma.booking.findMany({
-  where: {
-    status: "CONFIRMED",
-  },
-  include: {
-    bookingServices: {
-      include: {
-        service: true,
+      where: {
+        status: "CONFIRMED",
       },
-    },
-  },
-});
-
+      include: {
+        bookingServices: {
+          include: {
+            service: true,
+          },
+        },
+      },
+    });
     for (const booking of bookings) {
       if (!booking.date || !booking.time) continue;
-
       const dateOnly = booking.date.toISOString().split("T")[0];
-
       const appointmentDateTime = new Date(`${dateOnly} ${booking.time}`);
-
       if (Number.isNaN(appointmentDateTime.getTime())) continue;
-
-      // Total duration of all booked services
       const totalDuration = booking.bookingServices.reduce(
         (total, item) => total + Number(item.service?.duration || 0),
         0,
       );
-
-      // Appointment end time = start time + service duration
       const appointmentEndTime = new Date(
         appointmentDateTime.getTime() + totalDuration * 60 * 1000,
       );
-
-      // Cancel ONLY after complete appointment duration
-      // and ONLY if customer has not arrived.
       if (appointmentEndTime < now) {
         await prisma.booking.update({
           where: {
             id: booking.id,
           },
           data: {
-  status: "CANCELLED",
-  cancelledAt: new Date(),
-  cancelReason: "NOT_ARRIVED",
-},
+            status: "CANCELLED",
+            cancelledAt: new Date(),
+            cancelReason: "NOT_ARRIVED",
+          },
         });
-
         await prisma.notification.create({
           data: {
             userId: booking.customerId,
@@ -60,7 +46,6 @@ const expireMissedBookings = async () => {
             message: `Your booking ${booking.bookingId} was cancelled because the appointment was missed.`,
           },
         });
-
         console.log(
           `Booking ${booking.bookingId} cancelled because customer did not arrive before appointment ended.`,
         );
@@ -70,24 +55,14 @@ const expireMissedBookings = async () => {
     console.error("Expire Missed Bookings Error:", error);
   }
 };
-
 const router = Router();
-
 setInterval(() => {
   expireMissedBookings();
 }, 60 * 1000);
-
-// ===============================
-// CREATE BOOKING
-// ===============================
 router.post("/", async (req, res) => {
   try {
     const { customerId, salonId, serviceIds, staffId, date, time, discount } =
       req.body;
-
-    // -------------------------------
-    // Basic validation
-    // -------------------------------
     if (
       !customerId ||
       !salonId ||
@@ -100,12 +75,10 @@ router.post("/", async (req, res) => {
         message: "customerId, salonId, serviceIds, date and time are required",
       });
     }
-
     const customerIdNumber = Number(customerId);
     const salonIdNumber = Number(salonId);
     const serviceIdNumbers = serviceIds.map(Number);
     const staffIdNumber = staffId ? Number(staffId) : null;
-
     if (
       Number.isNaN(customerIdNumber) ||
       Number.isNaN(salonIdNumber) ||
@@ -115,15 +88,9 @@ router.post("/", async (req, res) => {
         message: "Invalid ID provided",
       });
     }
-
-    // -------------------------------
-    // Date handling
-    // -------------------------------
     const dateOnly = String(date).split("T")[0];
-
     const startOfDay = new Date(`${dateOnly}T00:00:00.000Z`);
     const endOfDay = new Date(`${dateOnly}T23:59:59.999Z`);
-
     if (
       Number.isNaN(startOfDay.getTime()) ||
       Number.isNaN(endOfDay.getTime())
@@ -132,31 +99,18 @@ router.post("/", async (req, res) => {
         message: "Invalid date",
       });
     }
-
-    // -------------------------------
-    // Transaction
-    // -------------------------------
     const booking = await prisma.$transaction(async (tx) => {
-      // ===============================
-      // 1. Check Salon Live Status
-      // ===============================
       const salon = await tx.salon.findUnique({
         where: {
           id: salonIdNumber,
         },
       });
-
       if (!salon) {
         throw new Error("SALON_NOT_FOUND");
       }
-
       if (!salon.isLive) {
         throw new Error("SALON_OFFLINE");
       }
-
-      // ===============================
-      // 1. Check Services
-      // ===============================
       const services = await tx.service.findMany({
         where: {
           id: {
@@ -165,16 +119,9 @@ router.post("/", async (req, res) => {
           salonId: salonIdNumber,
         },
       });
-
       if (services.length !== serviceIdNumbers.length) {
         throw new Error("INVALID_SERVICES");
       }
-
-      // ===============================
-      // 2. Lock selected availability slot
-      // ===============================
-      // Only an available slot can be updated.
-      // This prevents the same slot from being booked twice.
       const slotUpdate = await tx.availability.updateMany({
         where: {
           salonId: salonIdNumber,
@@ -189,80 +136,44 @@ router.post("/", async (req, res) => {
           isAvailable: false,
         },
       });
-
-      // No available slot found
       if (slotUpdate.count === 0) {
         throw new Error("SLOT_NOT_AVAILABLE");
       }
-
-      // ===============================
-      // 3. Calculate amount
-      // ===============================
       const amount = services.reduce(
         (total, service) => total + Number(service.price),
         0,
       );
-
-      // Booking fee
-      // First service = ₹10
-      // Additional service = ₹2 each
       const bookingFee =
         services.length > 0 ? 10 + (services.length - 1) * 2 : 0;
-
       const finalDiscount = Number(discount || 0);
-
       const finalAmount = amount + bookingFee - finalDiscount;
-
-      // ===============================
-      // 4. Generate Booking ID
-      // ===============================
       const bookingId = `BOOK-${Date.now()}`;
-
-      // ===============================
-      // 5. Generate QR data
-      // ===============================
       const qrCode = JSON.stringify({
         bookingId,
         customerId: customerIdNumber,
         salonId: salonIdNumber,
       });
-
-      // ===============================
-      // 6. Create Booking
-      // ===============================
       const newBooking = await tx.booking.create({
         data: {
           bookingId,
           qrCode,
-
           customerId: customerIdNumber,
           salonId: salonIdNumber,
-
           serviceId: serviceIdNumbers[0],
-
           staffId: staffIdNumber,
-
           date: startOfDay,
-
           time,
-
           amount,
-
           bookingFee,
-
           discount: finalDiscount,
-
           finalAmount,
-
           status: "CONFIRMED",
-
           bookingServices: {
             create: services.map((service) => ({
               serviceId: service.id,
             })),
           },
         },
-
         include: {
           bookingServices: {
             include: {
@@ -271,7 +182,6 @@ router.post("/", async (req, res) => {
           },
         },
       });
-
       await tx.notification.create({
         data: {
           userId: customerIdNumber,
@@ -279,122 +189,89 @@ router.post("/", async (req, res) => {
           message: `Your booking ${bookingId} has been created successfully.`,
         },
       });
-
-// ===============================
-// PARTNER NOTIFICATION
-// ===============================
-
-if (salon.partnerId) {
-  await tx.notification.create({
-  data: {
-    partnerId: salon.partnerId,
-    title: "New Confirmed Booking",
-    message: `Booking ${bookingId} is confirmed for ${dateOnly} at ${time}.`,
-  },
-});
-
-  console.log(
-    `Partner notification created for partnerId: ${salon.partnerId}`,
-  );
-}
-
-// ===============================
-// FCM PUSH NOTIFICATIONS
-// ===============================
-
-try {
-  // -------------------------------
-  // Customer FCM
-  // -------------------------------
-
-  const customerTokens = await tx.deviceToken.findMany({
-    where: {
-      userId: customerIdNumber,
-      isActive: true,
-    },
-  });
-
-  for (const device of customerTokens) {
-    try {
-      await sendFcmNotification(
-  device.token,
-  "Booking Confirmed! 🎉",
-  `Your booking ${bookingId} is confirmed for ${dateOnly} at ${time}.`,
-  {
-    type: "BOOKING_CONFIRMED",
-    recipientId: String(customerIdNumber),
-    bookingId: String(bookingId),
-    salonId: String(salonIdNumber),
-    notificationId: "",
-    screen: "BookingDetails",
-  },
-);
-    } catch (error) {
-      console.error(
-        `Customer FCM failed for token ${device.id}:`,
-        error,
-      );
-    }
-  }
-
-  // -------------------------------
-  // Partner FCM
-  // -------------------------------
-
-  if (salon.partnerId) {
-    const partnerTokens = await tx.deviceToken.findMany({
-      where: {
-        partnerId: salon.partnerId,
-        isActive: true,
-      },
-    });
-
-    const customer = await tx.user.findUnique({
-      where: {
-        id: customerIdNumber,
-      },
-    });
-
-    const customerName = customer?.name || "Customer";
-
-    for (const device of partnerTokens) {
+      if (salon.partnerId) {
+        await tx.notification.create({
+          data: {
+            partnerId: salon.partnerId,
+            title: "New Confirmed Booking",
+            message: `Booking ${bookingId} is confirmed for ${dateOnly} at ${time}.`,
+          },
+        });
+        console.log(
+          `Partner notification created for partnerId: ${salon.partnerId}`,
+        );
+      }
       try {
-        await sendFcmNotification(
-  device.token,
-  "New Confirmed Booking",
-  `${customerName} has booked an appointment for ${dateOnly} at ${time}.`,
-  {
-    type: "BOOKING_CONFIRMED",
-    recipientId: String(salon.partnerId),
-    bookingId: String(bookingId),
-    salonId: String(salonIdNumber),
-    notificationId: "",
-    screen: "BookingDetails",
-  },
-);
+        const customerTokens = await tx.deviceToken.findMany({
+          where: {
+            userId: customerIdNumber,
+            isActive: true,
+          },
+        });
+        for (const device of customerTokens) {
+          try {
+            await sendFcmNotification(
+              device.token,
+              "Booking Confirmed! 🎉",
+              `Your booking ${bookingId} is confirmed for ${dateOnly} at ${time}.`,
+              {
+                type: "BOOKING_CONFIRMED",
+                recipientId: String(customerIdNumber),
+                bookingId: String(bookingId),
+                salonId: String(salonIdNumber),
+                notificationId: "",
+                screen: "BookingDetails",
+              },
+            );
+          } catch (error) {
+            console.error(`Customer FCM failed for token ${device.id}:`, error);
+          }
+        }
+        if (salon.partnerId) {
+          const partnerTokens = await tx.deviceToken.findMany({
+            where: {
+              partnerId: salon.partnerId,
+              isActive: true,
+            },
+          });
+          const customer = await tx.user.findUnique({
+            where: {
+              id: customerIdNumber,
+            },
+          });
+          const customerName = customer?.name || "Customer";
+          for (const device of partnerTokens) {
+            try {
+              await sendFcmNotification(
+                device.token,
+                "New Confirmed Booking",
+                `${customerName} has booked an appointment for ${dateOnly} at ${time}.`,
+                {
+                  type: "BOOKING_CONFIRMED",
+                  recipientId: String(salon.partnerId),
+                  bookingId: String(bookingId),
+                  salonId: String(salonIdNumber),
+                  notificationId: "",
+                  screen: "BookingDetails",
+                },
+              );
+            } catch (error) {
+              console.error(
+                `Partner FCM failed for token ${device.id}:`,
+                error,
+              );
+            }
+          }
+        }
+        console.log(`FCM notifications processed for booking ${bookingId}`);
       } catch (error) {
         console.error(
-          `Partner FCM failed for token ${device.id}:`,
+          `FCM booking notification error for ${bookingId}:`,
           error,
         );
       }
-    }
-  }
-
-  console.log(`FCM notifications processed for booking ${bookingId}`);
-} catch (error) {
-  console.error(
-    `FCM booking notification error for ${bookingId}:`,
-    error,
-  );
-}
-
-return newBooking;
- });
-
-    // ===============================
-    // SUCCESS
-    // ===============================
+      return newBooking;
+    });
     return res.status(201).json({
       message: "Booking created successfully",
       booking,
@@ -405,44 +282,32 @@ return newBooking;
         message: "Salon not found",
       });
     }
-
     if (error?.message === "SALON_OFFLINE") {
       return res.status(400).json({
         message: "This salon is currently offline and not accepting bookings.",
       });
     }
-
-    // Slot already booked
     if (error?.message === "SLOT_NOT_AVAILABLE") {
       return res.status(409).json({
         message:
           "This time slot is no longer available. Please select another slot.",
       });
     }
-
-    // Invalid services
     if (error?.message === "INVALID_SERVICES") {
       return res.status(400).json({
         message: "One or more selected services are invalid for this salon.",
       });
     }
-
     console.error("Create booking error:", error);
-
     return res.status(500).json({
       message: "Failed to create booking",
       error: error?.message,
     });
   }
 });
-
-// ===============================
-// GET BOOKING BY BOOKING ID
-// ===============================
 router.get("/by-booking-id/:bookingId", async (req, res) => {
   try {
     const { bookingId } = req.params;
-
     const booking = await prisma.booking.findUnique({
       where: {
         bookingId,
@@ -460,68 +325,49 @@ router.get("/by-booking-id/:bookingId", async (req, res) => {
         reviews: true,
       },
     });
-
     if (!booking) {
       return res.status(404).json({
         message: "Booking not found",
       });
     }
-
     return res.json(booking);
   } catch (error: any) {
     console.error("Get booking error:", error);
-
     return res.status(500).json({
       message: "Failed to fetch booking",
       error: error?.message,
     });
   }
 });
-
-// Customer cancellation is disabled.
-// Only the partner can cancel a confirmed booking.
-router.patch(
-  "/customer/:customerId/:bookingId/cancel",
-  async (_req, res) => {
-    return res.status(403).json({
-      message: "Customer cancellation is disabled.",
-    });
-  },
-);
-
-// ===============================
-// GET PARTNER DASHBOARD TODAY STATS
-// ===============================
+router.patch("/customer/:customerId/:bookingId/cancel", async (_req, res) => {
+  return res.status(403).json({
+    message: "Customer cancellation is disabled.",
+  });
+});
 router.get("/partner/:mobile/today-stats", async (req, res) => {
   try {
     const mobile = String(req.params.mobile).trim();
-
     const partner = await prisma.partner.findUnique({
       where: {
         mobile,
       },
     });
-
     if (!partner) {
       return res.status(404).json({
         message: "Partner not found",
       });
     }
-
     const salon = await prisma.salon.findFirst({
       where: {
         partnerId: partner.id,
       },
     });
-
     if (!salon) {
       return res.status(404).json({
         message: "Salon not found",
       });
     }
-
     const now = new Date();
-
     const startOfToday = new Date(
       now.getFullYear(),
       now.getMonth(),
@@ -531,7 +377,6 @@ router.get("/partner/:mobile/today-stats", async (req, res) => {
       0,
       0,
     );
-
     const startOfTomorrow = new Date(
       now.getFullYear(),
       now.getMonth(),
@@ -541,8 +386,6 @@ router.get("/partner/:mobile/today-stats", async (req, res) => {
       0,
       0,
     );
-
-    // Get today's bookings for this salon
     const bookings = await prisma.booking.findMany({
       where: {
         salonId: salon.id,
@@ -552,32 +395,21 @@ router.get("/partner/:mobile/today-stats", async (req, res) => {
         },
       },
     });
-
-    // Total today's bookings
-    // Cancelled bookings should not be counted
     const activeBookings = bookings.filter(
       (booking) => booking.status !== "CANCELLED",
     );
-
     const totalBookings = activeBookings.length;
-
-    // Only PENDING bookings
     const pendingBookings = activeBookings.filter(
       (booking) => booking.status === "PENDING",
     ).length;
-
-    // Only COMPLETED bookings contribute to today's earnings
-    // Booking fee is NOT included
     const completedBookings = activeBookings.filter(
       (booking) => booking.status === "COMPLETED",
     );
-
     const earnings = completedBookings.reduce(
       (total, booking) =>
         total + Number(booking.amount || 0) - Number(booking.discount || 0),
       0,
     );
-
     return res.json({
       bookings: totalBookings,
       pending: pendingBookings,
@@ -585,66 +417,49 @@ router.get("/partner/:mobile/today-stats", async (req, res) => {
     });
   } catch (error: any) {
     console.error("Partner Today Stats Error:", error);
-
     return res.status(500).json({
       message: "Failed to fetch today's stats",
       error: error?.message,
     });
   }
 });
-
-// ===============================
-// GET PARTNER TODAY APPOINTMENTS
-// ===============================
 router.get("/partner/:mobile/today-appointments", async (req, res) => {
   try {
     const mobile = String(req.params.mobile).trim();
-
     const partner = await prisma.partner.findUnique({
       where: {
         mobile,
       },
     });
-
     if (!partner) {
       return res.status(404).json({
         message: "Partner not found",
       });
     }
-
     const salon = await prisma.salon.findFirst({
       where: {
         partnerId: partner.id,
       },
     });
-
     if (!salon) {
       return res.status(404).json({
         message: "Salon not found",
       });
     }
-
     const selectedDate = String(req.query.date || "").trim();
-
     let startOfSelectedDate: Date;
     let endOfSelectedDate: Date;
-
     if (selectedDate) {
       startOfSelectedDate = new Date(`${selectedDate}T00:00:00+05:30`);
-
       endOfSelectedDate = new Date(`${selectedDate}T23:59:59.999+05:30`);
     } else {
       const now = new Date();
-
       const indiaDate = new Intl.DateTimeFormat("en-CA", {
         timeZone: "Asia/Kolkata",
       }).format(now);
-
       startOfSelectedDate = new Date(`${indiaDate}T00:00:00+05:30`);
-
       endOfSelectedDate = new Date(`${indiaDate}T23:59:59.999+05:30`);
     }
-
     if (
       Number.isNaN(startOfSelectedDate.getTime()) ||
       Number.isNaN(endOfSelectedDate.getTime())
@@ -653,7 +468,6 @@ router.get("/partner/:mobile/today-appointments", async (req, res) => {
         message: "Invalid date",
       });
     }
-
     const bookings = await prisma.booking.findMany({
       where: {
         salonId: salon.id,
@@ -675,21 +489,15 @@ router.get("/partner/:mobile/today-appointments", async (req, res) => {
         },
       },
     });
-
     return res.json(bookings);
   } catch (error: any) {
     console.error("Partner Today Appointments Error:", error);
-
     return res.status(500).json({
       message: "Failed to fetch today's appointments",
       error: error?.message,
     });
   }
 });
-
-// ===============================
-// UPDATE PARTNER BOOKING STATUS
-// ===============================
 router.patch("/partner/:mobile/:bookingId/status", async (req, res) => {
   try {
     const mobile = String(req.params.mobile).trim();
@@ -697,98 +505,71 @@ router.patch("/partner/:mobile/:bookingId/status", async (req, res) => {
     const status = String(req.body.status || "")
       .trim()
       .toUpperCase();
-
-    const allowedStatuses = [
-  "ARRIVED",
-  "STARTED",
-  "COMPLETED",
-  "CANCELLED",
-];
-
+    const allowedStatuses = ["ARRIVED", "STARTED", "COMPLETED", "CANCELLED"];
     if (!allowedStatuses.includes(status)) {
       return res.status(400).json({
         message: "Invalid booking status",
       });
     }
-
     const partner = await prisma.partner.findUnique({
       where: {
         mobile,
       },
     });
-
     if (!partner) {
       return res.status(404).json({
         message: "Partner not found",
       });
     }
-
     const salon = await prisma.salon.findFirst({
       where: {
         partnerId: partner.id,
       },
     });
-
     if (!salon) {
       return res.status(404).json({
         message: "Salon not found",
       });
     }
-
     const booking = await prisma.booking.findFirst({
       where: {
         bookingId,
         salonId: salon.id,
       },
     });
-
     if (!booking) {
       return res.status(404).json({
         message: "Booking not found",
       });
     }
-
     const allowedNextStatuses: Record<string, string[]> = {
-  CONFIRMED: ["ARRIVED", "CANCELLED"],
-  ARRIVED: ["STARTED"],
-  STARTED: ["COMPLETED"],
-  COMPLETED: [],
-  CANCELLED: [],
-};
-
-if (!allowedNextStatuses[booking.status]?.includes(status)) {
-  return res.status(400).json({
-    message: `Cannot change booking status from ${booking.status} to ${status}.`,
-  });
-}
-
+      CONFIRMED: ["ARRIVED", "CANCELLED"],
+      ARRIVED: ["STARTED"],
+      STARTED: ["COMPLETED"],
+      COMPLETED: [],
+      CANCELLED: [],
+    };
+    if (!allowedNextStatuses[booking.status]?.includes(status)) {
+      return res.status(400).json({
+        message: `Cannot change booking status from ${booking.status} to ${status}.`,
+      });
+    }
     const updatedBooking = await prisma.$transaction(async (tx) => {
       const updated = await tx.booking.update({
         where: {
           id: booking.id,
         },
         data: {
-  status,
-
-  cancelledAt:
-    status === "CANCELLED"
-      ? new Date()
-      : booking.cancelledAt,
-
-  cancelReason:
-    status === "CANCELLED"
-      ? "SALON_CANCELLED"
-      : null,
-},
+          status,
+          cancelledAt:
+            status === "CANCELLED" ? new Date() : booking.cancelledAt,
+          cancelReason: status === "CANCELLED" ? "SALON_CANCELLED" : null,
+        },
       });
-
-
       if (status === "ARRIVED") {
         const notificationTitle = "Customer Arrived";
         const notificationMessage =
-  "Your arrival has been confirmed. Your salon service will start shortly.";
-
-        // Customer in-app notification
+          "Your arrival has been confirmed. Your salon service will start shortly.";
         const notification = await tx.notification.create({
           data: {
             userId: booking.customerId,
@@ -796,16 +577,12 @@ if (!allowedNextStatuses[booking.status]?.includes(status)) {
             message: notificationMessage,
           },
         });
-
-        // Customer FCM device tokens
         const customerTokens = await tx.deviceToken.findMany({
           where: {
             userId: booking.customerId,
             isActive: true,
           },
         });
-
-        // Send push notification to all Customer devices
         for (const device of customerTokens) {
           try {
             await sendFcmNotification(
@@ -829,137 +606,113 @@ if (!allowedNextStatuses[booking.status]?.includes(status)) {
           }
         }
       }
-
-
       if (status === "CANCELLED") {
-  const notification = await tx.notification.create({
-    data: {
-      userId: booking.customerId,
-      title: "Booking Cancelled",
-      message: `Your appointment request for ${booking.date.toLocaleDateString(
-        "en-GB",
-      )} at ${booking.time} was cancelled by the salon.`,
-    },
-  });
-
-  const customerTokens = await tx.deviceToken.findMany({
-    where: {
-      userId: booking.customerId,
-      isActive: true,
-    },
-  });
-
-  for (const device of customerTokens) {
-    try {
-      
-await sendFcmNotification(
-  device.token,
-  "Booking Cancelled",
-  `Your appointment for ${booking.date.toLocaleDateString(
-    "en-GB",
-  )} at ${booking.time} was cancelled by the salon.`,
-  {
-    type: "BOOKING_CANCELLED_BY_SALON",
-    recipientId: String(booking.customerId),
-    bookingId: String(booking.bookingId),
-    salonId: String(booking.salonId),
-    notificationId: String(notification.id),
-    screen: "BookingDetails",
-  },
-);
-
-    } catch (error) {
-      console.error(
-        `Customer FCM failed for token ${device.id}:`,
-        error,
-      );
-    }
-  }
-}
-
-if (status === "STARTED") {
-  const notification = await tx.notification.create({
-    data: {
-      userId: booking.customerId,
-      title: "Service Started",
-      message: "Your salon service has started.",
-    },
-  });
-
-  const customerTokens = await tx.deviceToken.findMany({
-    where: {
-      userId: booking.customerId,
-      isActive: true,
-    },
-  });
-
-  for (const device of customerTokens) {
-    try {
-      await sendFcmNotification(
-        device.token,
-        "Service Started",
-        "Your salon service has started.",
-        {
-          type: "SERVICE_STARTED",
-          recipientId: String(booking.customerId),
-          bookingId: String(booking.bookingId),
-          salonId: String(booking.salonId),
-          notificationId: String(notification.id),
-          screen: "BookingDetails",
-        },
-      );
-    } catch (error) {
-      console.error(
-        `Customer FCM failed for token ${device.id}:`,
-        error,
-      );
-    }
-  }
-}
-
-if (status === "COMPLETED") {
-  const salonName = salon.name || "the salon";
-
-  const notification = await tx.notification.create({
-    data: {
-      userId: booking.customerId,
-      title: "Service Completed",
-      message: `Your appointment has been completed successfully. Thank you for visiting ${salonName}.`,
-    },
-  });
-
-  const customerTokens = await tx.deviceToken.findMany({
-    where: {
-      userId: booking.customerId,
-      isActive: true,
-    },
-  });
-
-  for (const device of customerTokens) {
-    try {
-      await sendFcmNotification(
-        device.token,
-        "Service Completed",
-        `Your appointment has been completed successfully. Thank you for visiting ${salonName}.`,
-        {
-          type: "SERVICE_COMPLETED",
-          recipientId: String(booking.customerId),
-          bookingId: String(booking.bookingId),
-          salonId: String(booking.salonId),
-          notificationId: String(notification.id),
-          screen: "BookingDetails",
-        },
-      );
-    } catch (error) {
-      console.error(
-        `Customer FCM failed for token ${device.id}:`,
-        error,
-      );
-    }
-  }
-}
-
-      // Release the booked slot when salon rejects the booking
+        const notification = await tx.notification.create({
+          data: {
+            userId: booking.customerId,
+            title: "Booking Cancelled",
+            message: `Your appointment request for ${booking.date.toLocaleDateString(
+              "en-GB",
+            )} at ${booking.time} was cancelled by the salon.`,
+          },
+        });
+        const customerTokens = await tx.deviceToken.findMany({
+          where: {
+            userId: booking.customerId,
+            isActive: true,
+          },
+        });
+        for (const device of customerTokens) {
+          try {
+            await sendFcmNotification(
+              device.token,
+              "Booking Cancelled",
+              `Your appointment for ${booking.date.toLocaleDateString(
+                "en-GB",
+              )} at ${booking.time} was cancelled by the salon.`,
+              {
+                type: "BOOKING_CANCELLED_BY_SALON",
+                recipientId: String(booking.customerId),
+                bookingId: String(booking.bookingId),
+                salonId: String(booking.salonId),
+                notificationId: String(notification.id),
+                screen: "BookingDetails",
+              },
+            );
+          } catch (error) {
+            console.error(`Customer FCM failed for token ${device.id}:`, error);
+          }
+        }
+      }
+      if (status === "STARTED") {
+        const notification = await tx.notification.create({
+          data: {
+            userId: booking.customerId,
+            title: "Service Started",
+            message: "Your salon service has started.",
+          },
+        });
+        const customerTokens = await tx.deviceToken.findMany({
+          where: {
+            userId: booking.customerId,
+            isActive: true,
+          },
+        });
+        for (const device of customerTokens) {
+          try {
+            await sendFcmNotification(
+              device.token,
+              "Service Started",
+              "Your salon service has started.",
+              {
+                type: "SERVICE_STARTED",
+                recipientId: String(booking.customerId),
+                bookingId: String(booking.bookingId),
+                salonId: String(booking.salonId),
+                notificationId: String(notification.id),
+                screen: "BookingDetails",
+              },
+            );
+          } catch (error) {
+            console.error(`Customer FCM failed for token ${device.id}:`, error);
+          }
+        }
+      }
+      if (status === "COMPLETED") {
+        const salonName = salon.name || "the salon";
+        const notification = await tx.notification.create({
+          data: {
+            userId: booking.customerId,
+            title: "Service Completed",
+            message: `Your appointment has been completed successfully. Thank you for visiting ${salonName}.`,
+          },
+        });
+        const customerTokens = await tx.deviceToken.findMany({
+          where: {
+            userId: booking.customerId,
+            isActive: true,
+          },
+        });
+        for (const device of customerTokens) {
+          try {
+            await sendFcmNotification(
+              device.token,
+              "Service Completed",
+              `Your appointment has been completed successfully. Thank you for visiting ${salonName}.`,
+              {
+                type: "SERVICE_COMPLETED",
+                recipientId: String(booking.customerId),
+                bookingId: String(booking.bookingId),
+                salonId: String(booking.salonId),
+                notificationId: String(notification.id),
+                screen: "BookingDetails",
+              },
+            );
+          } catch (error) {
+            console.error(`Customer FCM failed for token ${device.id}:`, error);
+          }
+        }
+      }
       if (status === "CANCELLED") {
         await tx.availability.updateMany({
           where: {
@@ -978,13 +731,11 @@ if (status === "COMPLETED") {
             isAvailable: true,
           },
         });
-
         const existingRefund = await tx.refund.findFirst({
           where: {
             bookingId: booking.id,
           },
         });
-
         if (!existingRefund) {
           await tx.refund.create({
             data: {
@@ -999,60 +750,44 @@ if (status === "COMPLETED") {
           });
         }
       }
-
       return updated;
     });
-
     return res.json({
       message: "Booking status updated successfully",
       booking: updatedBooking,
     });
   } catch (error: any) {
     console.error("Update Booking Status Error:", error);
-
     return res.status(500).json({
       message: "Failed to update booking status",
       error: error?.message,
     });
   }
 });
-
-// ===============================
-// GET PARTNER EARNINGS
-// ===============================
 router.get("/partner/:mobile/monthly-earnings", async (req, res) => {
   try {
     const mobile = String(req.params.mobile).trim();
-
-    // Find partner
     const partner = await prisma.partner.findUnique({
       where: {
         mobile,
       },
     });
-
     if (!partner) {
       return res.status(404).json({
         message: "Partner not found",
       });
     }
-
-    // Find partner's salon
     const salon = await prisma.salon.findFirst({
       where: {
         partnerId: partner.id,
       },
     });
-
     if (!salon) {
       return res.status(404).json({
         message: "Salon not found",
       });
     }
-
     const now = new Date();
-
-    // Start of current month
     const startOfMonth = new Date(
       now.getFullYear(),
       now.getMonth(),
@@ -1062,8 +797,6 @@ router.get("/partner/:mobile/monthly-earnings", async (req, res) => {
       0,
       0,
     );
-
-    // Start of next month
     const startOfNextMonth = new Date(
       now.getFullYear(),
       now.getMonth() + 1,
@@ -1073,8 +806,6 @@ router.get("/partner/:mobile/monthly-earnings", async (req, res) => {
       0,
       0,
     );
-
-    // Start of today
     const startOfToday = new Date(
       now.getFullYear(),
       now.getMonth(),
@@ -1084,8 +815,6 @@ router.get("/partner/:mobile/monthly-earnings", async (req, res) => {
       0,
       0,
     );
-
-    // Start of tomorrow
     const startOfTomorrow = new Date(
       now.getFullYear(),
       now.getMonth(),
@@ -1095,8 +824,6 @@ router.get("/partner/:mobile/monthly-earnings", async (req, res) => {
       0,
       0,
     );
-
-    // Completed bookings of current month
     const completedBookings = await prisma.booking.findMany({
       where: {
         salonId: salon.id,
@@ -1118,47 +845,33 @@ router.get("/partner/:mobile/monthly-earnings", async (req, res) => {
         },
       },
     });
-
-    // This Month
     const monthlyEarnings = completedBookings.reduce(
       (total, booking) =>
         total + Number(booking.amount || 0) - Number(booking.discount || 0),
       0,
     );
-
-    // Completed count
     const completedCount = completedBookings.length;
-
-    // Today's completed bookings
     const todayBookings = completedBookings.filter((booking) => {
       const bookingDate = new Date(booking.date);
-
       return bookingDate >= startOfToday && bookingDate < startOfTomorrow;
     });
-
     const todayEarnings = todayBookings.reduce(
       (total, booking) =>
         total + Number(booking.amount || 0) - Number(booking.discount || 0),
       0,
     );
-
-    // Pending settlements
     const pendingSettlements = await prisma.settlement.findMany({
       where: {
         salonId: salon.id,
         status: "PENDING",
       },
     });
-
     const pendingSettlementAmount = pendingSettlements.reduce(
       (total, settlement) => total + Number(settlement.partnerAmount || 0),
       0,
     );
-
-    // Recent earnings
     const recentEarnings = completedBookings.slice(0, 10).map((booking) => {
       const firstService = booking.bookingServices?.[0]?.service;
-
       return {
         id: booking.id,
         bookingId: booking.bookingId,
@@ -1168,7 +881,6 @@ router.get("/partner/:mobile/monthly-earnings", async (req, res) => {
         amount: Number(booking.amount || 0) - Number(booking.discount || 0),
       };
     });
-
     return res.json({
       monthlyEarnings,
       completedCount,
@@ -1178,103 +890,78 @@ router.get("/partner/:mobile/monthly-earnings", async (req, res) => {
     });
   } catch (error: any) {
     console.error("Partner Earnings Error:", error);
-
     return res.status(500).json({
       message: "Failed to fetch partner earnings",
       error: error?.message,
     });
   }
 });
-
-// ===============================
-// GET CUSTOMER BOOKINGS
-// ===============================
 router.get("/customer/:customerId", async (req, res) => {
   try {
     const customerId = Number(req.params.customerId);
-
     if (Number.isNaN(customerId)) {
       return res.status(400).json({
         message: "Invalid customer ID",
       });
     }
-
     const bookings = await prisma.booking.findMany({
       where: {
         customerId,
       },
-
       orderBy: {
         createdAt: "desc",
       },
-
       include: {
         salon: true,
         staff: true,
-
         bookingServices: {
           include: {
             service: true,
           },
         },
-
         payment: true,
-
         reviews: true,
       },
     });
-
     return res.json(bookings);
   } catch (error: any) {
     console.error("Get customer bookings error:", error);
-
     return res.status(500).json({
       message: "Failed to fetch customer bookings",
       error: error?.message,
     });
   }
 });
-
 router.post("/partner/:mobile/verify-qr", async (req, res) => {
   try {
     const mobile = String(req.params.mobile).trim();
     const { qrCode } = req.body;
-
     if (!mobile || !qrCode) {
       return res.status(400).json({
         message: "Partner mobile and QR code are required",
       });
     }
-
-    // Verify partner
     const partner = await prisma.partner.findUnique({
       where: { mobile },
     });
-
     if (!partner) {
       return res.status(404).json({
         message: "Partner not found",
       });
     }
-
-    // Get partner's salon
     const salon = await prisma.salon.findFirst({
       where: { partnerId: partner.id },
     });
-
     if (!salon) {
       return res.status(404).json({
         message: "Salon not found",
       });
     }
-
-    // Read QR data
     let qrData: {
       bookingId?: string;
       customerId?: number;
       salonId?: number;
     };
-
     try {
       qrData = JSON.parse(qrCode);
     } catch {
@@ -1282,21 +969,16 @@ router.post("/partner/:mobile/verify-qr", async (req, res) => {
         message: "Invalid QR code",
       });
     }
-
     if (!qrData.bookingId || !qrData.customerId || !qrData.salonId) {
       return res.status(400).json({
         message: "Invalid QR code data",
       });
     }
-
-    // Make sure QR belongs to this salon
     if (Number(qrData.salonId) !== salon.id) {
       return res.status(403).json({
         message: "This QR code does not belong to your salon",
       });
     }
-
-    // Find booking
     const booking = await prisma.booking.findFirst({
       where: {
         bookingId: qrData.bookingId,
@@ -1304,81 +986,63 @@ router.post("/partner/:mobile/verify-qr", async (req, res) => {
         salonId: salon.id,
       },
     });
-
     if (!booking) {
       return res.status(404).json({
         message: "Booking not found for this QR code",
       });
     }
-
-    // QR can complete only a started booking
     if (booking.status !== "STARTED") {
       return res.status(400).json({
         message: `Booking cannot be completed. Current status is ${booking.status}`,
       });
     }
-
-    // Complete booking
     const updatedBooking = await prisma.booking.update({
       where: { id: booking.id },
       data: {
         status: "COMPLETED",
       },
     });
-
-    // ===============================
-// CUSTOMER SERVICE COMPLETED
-// ===============================
-
-const notification = await prisma.notification.create({
-  data: {
-    userId: booking.customerId,
-    title: "Service Completed",
-    message: `Your appointment has been completed successfully. Thank you for visiting ${salon.name}.`,
-  },
-});
-
-const customerTokens = await prisma.deviceToken.findMany({
-  where: {
-    userId: booking.customerId,
-    isActive: true,
-  },
-});
-
-for (const device of customerTokens) {
-  try {
-    await sendFcmNotification(
-      device.token,
-      "Service Completed",
-      `Your appointment has been completed successfully. Thank you for visiting ${salon.name}.`,
-      {
-        type: "SERVICE_COMPLETED",
-        recipientId: String(booking.customerId),
-        bookingId: String(booking.bookingId),
-        salonId: String(booking.salonId),
-        notificationId: String(notification.id),
-        screen: "BookingDetails",
+    const notification = await prisma.notification.create({
+      data: {
+        userId: booking.customerId,
+        title: "Service Completed",
+        message: `Your appointment has been completed successfully. Thank you for visiting ${salon.name}.`,
       },
-    );
-  } catch (error) {
-    console.error(
-      `Customer FCM failed for token ${device.id}:`,
-      error,
-    );
-  }
-}
-
+    });
+    const customerTokens = await prisma.deviceToken.findMany({
+      where: {
+        userId: booking.customerId,
+        isActive: true,
+      },
+    });
+    for (const device of customerTokens) {
+      try {
+        await sendFcmNotification(
+          device.token,
+          "Service Completed",
+          `Your appointment has been completed successfully. Thank you for visiting ${salon.name}.`,
+          {
+            type: "SERVICE_COMPLETED",
+            recipientId: String(booking.customerId),
+            bookingId: String(booking.bookingId),
+            salonId: String(booking.salonId),
+            notificationId: String(notification.id),
+            screen: "BookingDetails",
+          },
+        );
+      } catch (error) {
+        console.error(`Customer FCM failed for token ${device.id}:`, error);
+      }
+    }
     return res.json({
       message: "QR verified and booking completed successfully",
       booking: updatedBooking,
     });
   } catch (error) {
     console.error("Verify Customer QR Error:", error);
-
     return res.status(500).json({
       message: "Something went wrong while verifying QR code",
     });
   }
 });
-
 export default router;

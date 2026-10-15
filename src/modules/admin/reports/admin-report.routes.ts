@@ -1,30 +1,22 @@
 import { Router } from "express";
 import prisma from "../../../prisma";
-
 const router = Router();
-
-// Get admin reports
 router.get("/", async (req, res) => {
   try {
     const months = Number(req.query.months) || 6;
-
     const validMonths = [3, 6, 12];
     const selectedMonths = validMonths.includes(months) ? months : 6;
-
     const now = new Date();
-
     const startDate = new Date(
       now.getFullYear(),
       now.getMonth() - selectedMonths + 1,
-      1
+      1,
     );
-
     const previousStartDate = new Date(
       now.getFullYear(),
       now.getMonth() - selectedMonths * 2 + 1,
-      1
+      1,
     );
-
     const [
       totalCustomers,
       totalSalons,
@@ -44,42 +36,33 @@ router.get("/", async (req, res) => {
       monthlyRevenueRaw,
       topSalonsRaw,
     ] = await Promise.all([
-      // ================= SUMMARY =================
-
       prisma.user.count({
         where: {
           role: "CUSTOMER",
         },
       }),
-
       prisma.salon.count(),
-
       prisma.booking.count(),
-
       prisma.booking.count({
         where: {
           status: "COMPLETED",
         },
       }),
-
       prisma.booking.count({
         where: {
           status: "CANCELLED",
         },
       }),
-
       prisma.booking.count({
         where: {
           status: "PENDING",
         },
       }),
-
       prisma.booking.count({
         where: {
           status: "CONFIRMED",
         },
       }),
-
       prisma.payment.aggregate({
         _sum: {
           amount: true,
@@ -88,20 +71,16 @@ router.get("/", async (req, res) => {
           status: "SUCCESS",
         },
       }),
-
       prisma.settlement.aggregate({
         _sum: {
           commission: true,
         },
       }),
-
       prisma.settlement.aggregate({
         _sum: {
           partnerAmount: true,
         },
       }),
-
-      // Average booking value
       prisma.booking.aggregate({
         _avg: {
           finalAmount: true,
@@ -112,9 +91,6 @@ router.get("/", async (req, res) => {
           },
         },
       }),
-
-      // ================= PREVIOUS PERIOD =================
-
       prisma.booking.count({
         where: {
           createdAt: {
@@ -123,7 +99,6 @@ router.get("/", async (req, res) => {
           },
         },
       }),
-
       prisma.user.count({
         where: {
           role: "CUSTOMER",
@@ -133,7 +108,6 @@ router.get("/", async (req, res) => {
           },
         },
       }),
-
       prisma.payment.aggregate({
         _sum: {
           amount: true,
@@ -146,9 +120,6 @@ router.get("/", async (req, res) => {
           },
         },
       }),
-
-      // ================= MONTHLY BOOKINGS =================
-
       prisma.booking.findMany({
         where: {
           createdAt: {
@@ -162,9 +133,6 @@ router.get("/", async (req, res) => {
           createdAt: "asc",
         },
       }),
-
-      // ================= MONTHLY REVENUE =================
-
       prisma.payment.findMany({
         where: {
           status: "SUCCESS",
@@ -180,9 +148,6 @@ router.get("/", async (req, res) => {
           createdAt: "asc",
         },
       }),
-
-      // ================= TOP SALONS =================
-
       prisma.booking.groupBy({
         by: ["salonId"],
         where: {
@@ -204,11 +169,6 @@ router.get("/", async (req, res) => {
         take: 5,
       }),
     ]);
-
-    // =====================================================
-    // MONTH HELPERS
-    // =====================================================
-
     const monthNames = [
       "Jan",
       "Feb",
@@ -223,33 +183,21 @@ router.get("/", async (req, res) => {
       "Nov",
       "Dec",
     ];
-
     const monthlyBookings = [];
     const monthlyRevenue = [];
-
     for (let i = selectedMonths - 1; i >= 0; i--) {
-      const date = new Date(
-        now.getFullYear(),
-        now.getMonth() - i,
-        1
-      );
-
+      const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
       const year = date.getFullYear();
       const month = date.getMonth();
-
       const bookingCount = monthlyBookingsRaw.filter((booking) => {
         const bookingDate = new Date(booking.createdAt);
-
         return (
-          bookingDate.getFullYear() === year &&
-          bookingDate.getMonth() === month
+          bookingDate.getFullYear() === year && bookingDate.getMonth() === month
         );
       }).length;
-
       const revenue = monthlyRevenueRaw
         .filter((payment) => {
           const paymentDate = new Date(payment.createdAt);
-
           return (
             paymentDate.getFullYear() === year &&
             paymentDate.getMonth() === month
@@ -258,24 +206,16 @@ router.get("/", async (req, res) => {
         .reduce((total, payment) => {
           return total + Number(payment.amount || 0);
         }, 0);
-
       monthlyBookings.push({
         month: monthNames[month],
         bookings: bookingCount,
       });
-
       monthlyRevenue.push({
         month: monthNames[month],
         revenue,
       });
     }
-
-    // =====================================================
-    // TOP SALONS
-    // =====================================================
-
     const topSalonIds = topSalonsRaw.map((item) => item.salonId);
-
     const salons = await prisma.salon.findMany({
       where: {
         id: {
@@ -287,12 +227,8 @@ router.get("/", async (req, res) => {
         name: true,
       },
     });
-
     const topSalons = topSalonsRaw.map((item) => {
-      const salon = salons.find(
-        (itemSalon) => itemSalon.id === item.salonId
-      );
-
+      const salon = salons.find((itemSalon) => itemSalon.id === item.salonId);
       return {
         salonId: item.salonId,
         salon: salon?.name || "Unknown Salon",
@@ -300,96 +236,43 @@ router.get("/", async (req, res) => {
         revenue: Number(item._sum.finalAmount || 0),
       };
     });
-
-    // =====================================================
-    // GROWTH CALCULATIONS
-    // =====================================================
-
-    const currentRevenue = Number(
-      revenueResult._sum.amount || 0
-    );
-
-    const previousRevenue = Number(
-      previousRevenueResult._sum.amount || 0
-    );
-
-    const calculateGrowth = (
-  current: number,
-  previous: number
-): number => {
+    const currentRevenue = Number(revenueResult._sum.amount || 0);
+    const previousRevenue = Number(previousRevenueResult._sum.amount || 0);
+    const calculateGrowth = (current: number, previous: number): number => {
       if (!previous) {
         return current > 0 ? 100 : 0;
       }
-
-      return Number(
-        (((current - previous) / previous) * 100).toFixed(1)
-      );
+      return Number((((current - previous) / previous) * 100).toFixed(1));
     };
-
-    const bookingGrowth = calculateGrowth(
-      totalBookings,
-      previousBookings
-    );
-
-    const customerGrowth = calculateGrowth(
-      totalCustomers,
-      previousCustomers
-    );
-
-    const revenueGrowth = calculateGrowth(
-      currentRevenue,
-      previousRevenue
-    );
-
-    // =====================================================
-    // RESPONSE
-    // =====================================================
-
+    const bookingGrowth = calculateGrowth(totalBookings, previousBookings);
+    const customerGrowth = calculateGrowth(totalCustomers, previousCustomers);
+    const revenueGrowth = calculateGrowth(currentRevenue, previousRevenue);
     return res.json({
-      // Existing fields
       totalBookings,
       completedBookings,
       cancelledBookings,
-
       totalRevenue: currentRevenue,
-
-      totalCommission:
-        commissionResult._sum.commission || 0,
-
-      totalPartnerEarnings:
-        partnerEarningsResult._sum.partnerAmount || 0,
-
-      // New summary fields
+      totalCommission: commissionResult._sum.commission || 0,
+      totalPartnerEarnings: partnerEarningsResult._sum.partnerAmount || 0,
       totalCustomers,
       totalSalons,
-
       pendingBookings,
       confirmedBookings,
-
-      averageBookingValue:
-        Number(
-          bookingAmountResult._avg.finalAmount || 0
-        ).toFixed(2),
-
-      // Growth
+      averageBookingValue: Number(
+        bookingAmountResult._avg.finalAmount || 0,
+      ).toFixed(2),
       bookingGrowth,
       customerGrowth,
       revenueGrowth,
-
-      // Charts
       monthlyBookings,
       monthlyRevenue,
-
-      // Top salons
       topSalons,
     });
   } catch (error) {
     console.error("Admin reports error:", error);
-
     return res.status(500).json({
       message: "Something went wrong",
     });
   }
 });
-
 export default router;
